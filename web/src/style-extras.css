@@ -1,20 +1,5 @@
 /* Cień v2 — Asystent Cienia, nawigacja krok po kroku, PWA. Ładowany po style.css (korzysta z jego zmiennych). */
 
-.route__actions {
-  display: grid;
-  gap: 8px;
-}
-
-.action-button--ghost {
-  border: 1px solid var(--line-strong);
-  background: var(--surface);
-  color: var(--shade-900);
-}
-
-.action-button--ghost:hover {
-  background: var(--shade-100);
-}
-
 .spinner--small {
   width: 13px;
   height: 13px;
@@ -61,10 +46,6 @@
 .panel--assistant .panel__body {
   flex: 1;
   overflow: hidden;
-}
-
-.panel--assistant .credits {
-  display: none;
 }
 
 .assistant {
@@ -526,6 +507,8 @@
 
 .app--navigating .panel,
 .app--navigating .assistant-fab,
+.app--navigating .layers,
+.app--navigating .heat-legend,
 .app--navigating .map-hint,
 .app--navigating .maplibregl-ctrl-top-right,
 .app--navigating .maplibregl-ctrl-scale {

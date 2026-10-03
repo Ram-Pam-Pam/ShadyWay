@@ -6,8 +6,6 @@ import type {
   AssistantEvent,
   AssistantRequest,
   AssistantStatus,
-  CoolSpot,
-  CoolSpotKind,
   DepartureRequest,
   DepartureResponse,
   GeocodeResult,
@@ -134,22 +132,6 @@ export function fetchDeparture(body: DepartureRequest, signal: AbortSignal): Pro
 
 function bboxParam(bbox: [number, number, number, number]): string {
   return bbox.map((v) => v.toFixed(6)).join(',');
-}
-
-/**
- * Punkty chłodu w oknie mapy (z kafli już pobranych przez serwer).
- * @param bbox [west, south, east, north] w stopniach
- * @param options.time z podaną chwilą serwer uzupełnia pole `shaded`
- */
-export function fetchCoolSpots(
-  bbox: [number, number, number, number],
-  options: { time?: string; kinds?: readonly CoolSpotKind[] } = {},
-  signal?: AbortSignal,
-): Promise<CoolSpot[]> {
-  const params: Record<string, string> = { bbox: bboxParam(bbox) };
-  if (options.time) params.time = options.time;
-  if (options.kinds && options.kinds.length > 0) params.kinds = options.kinds.join(',');
-  return get<CoolSpot[]>('/api/coolspots', params, signal);
 }
 
 export function fetchAssistantStatus(signal?: AbortSignal): Promise<AssistantStatus> {

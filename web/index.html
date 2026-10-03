@@ -32,16 +32,14 @@
         </button>
 
         <div id="panel-body" class="panel__body">
+          <div class="panel__top">
           <header class="brand">
             <svg class="brand__mark" viewBox="0 0 40 40" aria-hidden="true">
               <circle cx="27" cy="13" r="8" fill="#f59e0b" />
               <path d="M4 36 L4 18 L16 10 L28 18 L28 36 Z" fill="#272462" />
               <path d="M28 36 L28 24 L38 36 Z" fill="#272462" opacity="0.45" />
             </svg>
-            <div>
-              <h1 class="brand__name">Cień</h1>
-              <p class="brand__tagline">Chodź po Krakowie chłodniejszą stroną ulicy</p>
-            </div>
+            <h1 class="brand__name">Cień</h1>
           </header>
 
           <!-- Zakładki panelu: pasek jest ukryty, dopóki moduł asystenta nie włączy zakładki „Asystent” (ui/tabs.ts). -->
@@ -61,6 +59,7 @@
             >
               Asystent
             </button>
+          </div>
           </div>
 
           <div id="plan-panel" class="panel__section" role="tabpanel" aria-labelledby="tab-plan">
@@ -82,7 +81,7 @@
                     autocomplete="off"
                     spellcheck="false"
                     enterkeyhint="search"
-                    placeholder="Skąd? Wpisz adres lub kliknij mapę"
+                    placeholder="Skąd?"
                   />
                   <button class="icon-button place__clear" type="button" aria-label="Wyczyść punkt startowy" hidden>
                     <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
@@ -119,7 +118,7 @@
                     autocomplete="off"
                     spellcheck="false"
                     enterkeyhint="search"
-                    placeholder="Dokąd? Wpisz adres lub kliknij mapę"
+                    placeholder="Dokąd?"
                   />
                   <button class="icon-button place__clear" type="button" aria-label="Wyczyść punkt docelowy" hidden>
                     <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
@@ -139,24 +138,16 @@
                 </button>
               </div>
             </div>
-            <p id="pick-hint" class="hint" aria-live="polite"></p>
             <p id="form-error" class="notice notice--error" role="alert" hidden></p>
           </section>
 
           <section class="card" aria-labelledby="time-title">
-            <div class="card__head">
-              <h2 id="time-title" class="card__title">Kiedy wychodzisz?</h2>
-              <button id="now-button" class="chip-button" type="button">Teraz</button>
-            </div>
+            <h2 id="time-title" class="visually-hidden">Czas wyjścia</h2>
             <div class="time-row">
-              <div class="time-row__date">
-                <label class="field-label" for="date-input">Data</label>
-                <input id="date-input" class="date-input" type="date" required />
-              </div>
-              <div class="time-row__clock">
-                <span class="field-label" id="clock-label">Godzina w Krakowie</span>
-                <output id="time-readout" class="clock" for="time-slider" aria-labelledby="clock-label">12:00</output>
-              </div>
+              <label class="visually-hidden" for="date-input">Data wyjścia</label>
+              <input id="date-input" class="date-input" type="date" required />
+              <output id="time-readout" class="clock" for="time-slider" aria-label="Godzina wyjścia (czas w Krakowie)">12:00</output>
+              <button id="now-button" class="chip-button" type="button">Teraz</button>
             </div>
             <div class="day">
               <div class="day__sky" aria-hidden="true">
@@ -168,14 +159,32 @@
               <div id="day-band" class="day__band" aria-hidden="true"></div>
               <label class="visually-hidden" for="time-slider">Godzina wyjścia</label>
               <input id="time-slider" class="slider slider--day" type="range" min="0" max="1425" step="15" value="720" />
-              <div class="day__ticks" aria-hidden="true">
-                <span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
-              </div>
             </div>
-            <p id="sun-info" class="meta-line" aria-live="polite"></p>
-            <ul id="weather" class="chips" aria-label="Pogoda o wybranej godzinie"></ul>
+            <p id="weather" class="weather" aria-label="Pogoda o wybranej godzinie" hidden></p>
+          </section>
 
-            <div class="departure">
+          <section class="card" aria-labelledby="prefs-title">
+            <h2 id="prefs-title" class="visually-hidden">Preferencje trasy</h2>
+            <label id="pref-slider-label" class="visually-hidden" for="pref-slider">Preferencja cienia</label>
+            <input id="pref-slider" class="slider slider--pref" type="range" min="0" max="1" step="0.05" value="0.5" />
+            <div class="slider-ends" aria-hidden="true">
+              <span>Najkrótsza</span>
+              <span id="winter-tag" class="tag" hidden>tryb zimowy</span>
+              <span id="pref-max-label">Najwięcej cienia</span>
+            </div>
+            <fieldset class="segmented">
+              <legend class="visually-hidden">Sposób poruszania się</legend>
+              <div id="mobility-options" class="segmented__options"></div>
+            </fieldset>
+          </section>
+
+          <section class="routes-section" aria-labelledby="routes-title">
+            <h2 id="routes-title" class="visually-hidden">Trasy</h2>
+            <div id="route-warnings"></div>
+            <div id="route-status" aria-live="polite"></div>
+            <ul id="route-list" class="routes" aria-label="Warianty trasy"></ul>
+
+            <div id="departure" class="departure" hidden>
               <button
                 id="departure-button"
                 class="chip-button chip-button--wide"
@@ -186,7 +195,7 @@
                 <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
                   <path d="M3 17V11M7.7 17V6M12.3 17V9M17 17V3" />
                 </svg>
-                <span>Kiedy najlepiej wyjść?</span>
+                <span>Kiedy wyjść?</span>
                 <svg class="icon chip-button__chevron" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
                   <path d="M5 8l5 5 5-5" />
                 </svg>
@@ -194,107 +203,10 @@
               <div id="departure-body" class="departure__body" hidden></div>
             </div>
           </section>
-
-          <section class="card" aria-labelledby="prefs-title">
-            <h2 id="prefs-title" class="card__title">Preferencje trasy</h2>
-
-            <fieldset class="segmented">
-              <legend class="field-label">Jak się poruszasz?</legend>
-              <div id="mobility-options" class="segmented__options"></div>
-            </fieldset>
-
-            <fieldset class="segmented">
-              <legend class="field-label">Czego szukasz?</legend>
-              <div id="comfort-options" class="segmented__options"></div>
-            </fieldset>
-            <p id="comfort-badge" class="comfort-badge" role="status" hidden></p>
-
-            <div class="pref">
-              <div class="pref__head">
-                <h3 id="pref-title" class="pref__title">Ile cienia?</h3>
-                <output id="pref-readout" class="card__value" for="pref-slider"></output>
-              </div>
-              <label id="pref-slider-label" class="visually-hidden" for="pref-slider">Preferencja cienia</label>
-              <input id="pref-slider" class="slider slider--pref" type="range" min="0" max="1" step="0.05" value="0.5" />
-              <div class="slider-ends" aria-hidden="true">
-                <span>Najkrótsza droga</span>
-                <span id="pref-max-label">Maksimum cienia</span>
-              </div>
-            </div>
-
-            <label class="toggle toggle--top">
-              <input id="via-coolspot" type="checkbox" />
-              <span class="toggle__switch" aria-hidden="true"></span>
-              <span class="toggle__text">
-                <span class="toggle__name">Przez punkt chłodu</span>
-                <span class="toggle__note">Zahacz o wodę pitną lub fontannę, jeśli nadkłada to niewiele drogi</span>
-              </span>
-            </label>
-          </section>
-
-          <section class="card card--routes" aria-labelledby="routes-title">
-            <h2 id="routes-title" class="card__title">Trasy</h2>
-            <div id="route-warnings"></div>
-            <div id="route-status" aria-live="polite"></div>
-            <ul id="route-list" class="routes" aria-label="Warianty trasy"></ul>
-            <div id="route-legend" class="legend" hidden>
-              <div class="legend__bar legend__bar--sun"></div>
-              <div class="legend__ends"><span>cień</span><span>Kolor odcinka trasy</span><span>słońce</span></div>
-            </div>
-            <div id="route-quality" class="quality" hidden></div>
-          </section>
-
-          <section class="card" aria-labelledby="layers-title">
-            <h2 id="layers-title" class="card__title">Warstwy mapy</h2>
-            <div class="toggles">
-              <label class="toggle">
-                <input id="layer-shadows" type="checkbox" />
-                <span class="toggle__switch" aria-hidden="true"></span>
-                <span class="toggle__text">
-                  <span class="toggle__name">Cienie</span>
-                  <span class="toggle__note" id="layer-shadows-note">Cienie budynków i drzew o wybranej godzinie</span>
-                </span>
-              </label>
-              <label class="toggle">
-                <input id="layer-heat" type="checkbox" />
-                <span class="toggle__switch" aria-hidden="true"></span>
-                <span class="toggle__text">
-                  <span class="toggle__name">Mapa ciepła (LST)</span>
-                  <span class="toggle__note" id="layer-heat-note">Satelitarna temperatura powierzchni</span>
-                </span>
-              </label>
-              <div id="heat-legend" class="legend legend--inset" hidden>
-                <div class="legend__bar" id="heat-legend-bar"></div>
-                <div class="legend__ends"><span id="heat-min"></span><span id="heat-max"></span></div>
-                <p id="heat-source" class="legend__source"></p>
-              </div>
-              <label class="toggle">
-                <input id="layer-coolspots" type="checkbox" />
-                <span class="toggle__switch" aria-hidden="true"></span>
-                <span class="toggle__text">
-                  <span class="toggle__name">Punkty chłodu</span>
-                  <span class="toggle__note" id="layer-coolspots-note">Woda pitna, fontanny, ławki, parki i wiaty</span>
-                </span>
-              </label>
-              <label class="toggle">
-                <input id="layer-buildings" type="checkbox" />
-                <span class="toggle__switch" aria-hidden="true"></span>
-                <span class="toggle__text">
-                  <span class="toggle__name">Budynki 3D</span>
-                  <span class="toggle__note" id="layer-buildings-note">Bryły budynków z pochylonym widokiem</span>
-                </span>
-              </label>
-            </div>
-          </section>
           </div>
 
           <!-- Punkt rozszerzenia: zawartość zakładki „Asystent” (panel czatu AI). -->
           <section id="assistant-panel" class="panel__section" role="tabpanel" aria-labelledby="tab-assistant" hidden></section>
-
-          <footer class="credits">
-            Cienie liczone z położenia słońca oraz wysokości budynków i drzew (LiDAR, OpenStreetMap). Temperatura
-            powierzchni: Landsat (USGS). Pogoda: Open-Meteo. Podkład: OpenFreeMap.
-          </footer>
         </div>
       </aside>
 
@@ -302,6 +214,47 @@
         <div id="map" class="map" role="application" aria-label="Mapa Krakowa z trasą"></div>
         <div id="map-progress" class="map-progress" hidden></div>
         <p id="map-hint" class="map-hint" role="status" hidden></p>
+
+        <div id="layers" class="layers">
+          <button
+            id="layers-button"
+            class="layers__button"
+            type="button"
+            aria-label="Warstwy mapy"
+            title="Warstwy mapy"
+            aria-expanded="false"
+            aria-controls="layers-popover"
+          >
+            <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <path d="M10 3l7.5 4L10 11 2.5 7z" />
+              <path d="M2.5 10.5L10 14.5l7.5-4M2.5 14L10 18l7.5-4" />
+            </svg>
+          </button>
+          <div id="layers-popover" class="layers__popover" role="group" aria-label="Warstwy mapy" hidden>
+            <label class="toggle">
+              <input id="layer-shadows" type="checkbox" />
+              <span class="toggle__switch" aria-hidden="true"></span>
+              <span class="toggle__name">Cienie</span>
+            </label>
+            <label class="toggle">
+              <input id="layer-heat" type="checkbox" />
+              <span class="toggle__switch" aria-hidden="true"></span>
+              <span class="toggle__name">Mapa ciepła</span>
+            </label>
+            <label class="toggle">
+              <input id="layer-buildings" type="checkbox" />
+              <span class="toggle__switch" aria-hidden="true"></span>
+              <span class="toggle__name">Budynki 3D</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="heat-legend" class="heat-legend" role="img" hidden>
+          <span id="heat-min"></span>
+          <span id="heat-legend-bar" class="heat-legend__bar"></span>
+          <span id="heat-max"></span>
+        </div>
+
         <!-- Punkt rozszerzenia: nakładka trybu nawigacji krok po kroku. -->
         <div id="nav-overlay" class="nav-overlay" hidden></div>
       </main>

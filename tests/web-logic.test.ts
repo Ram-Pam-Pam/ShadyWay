@@ -1,14 +1,7 @@
-// Czysta logika frontendu v2: hash i preferencje, etykiety, wykres „Kiedy wyjść?”, punkty chłodu, plan asystenta, SSE.
+// Czysta logika frontendu: hash i preferencje, etykiety, wykres „Kiedy wyjść?”, plan asystenta, SSE.
 
 import { describe, expect, it } from 'vitest';
-import type { CoolSpot, DepartureOption, RouteResult } from '../shared/types.ts';
-import {
-  COOL_SPOT_LAYER_CAP,
-  capCoolSpots,
-  coolSpotLayerNote,
-  coolSpotMarkerKey,
-  coolSpotMarkers,
-} from '../web/src/coolSpots.ts';
+import type { DepartureOption } from '../shared/types.ts';
 import {
   MIN_BAR_PCT,
   barHeightPct,
@@ -21,20 +14,17 @@ import {
 import { routeColorScale } from '../web/src/format.ts';
 import { parseHash, serializeHash, type ShareableState } from '../web/src/hash.ts';
 import {
-  adverseDistanceM,
-  autoComfortBadge,
   comfortShare,
   comfortTexts,
-  coolSpotTitle,
   plural,
   preferenceLabel,
-  qualityBadges,
+  routeFactsLine,
   routeSummary,
   signalsText,
   stairsText,
   stressLabel,
-  surfaceLabel,
   thermalText,
+  weatherLine,
 } from '../web/src/labels.ts';
 import { planToPatch } from '../web/src/plan.ts';
 import { DEFAULT_PREFS, PREFS_STORAGE_KEY, loadPrefs, parsePrefs, savePrefs, serializePrefs } from '../web/src/prefs.ts';
@@ -49,41 +39,47 @@ const BASE: ShareableState = {
   followNow: false,
   shadePreference: 0.5,
   mobility: 'default',
-  comfort: 'auto',
-  viaCoolSpot: false,
 };
 
-describe('hash: pola v2', () => {
-  it('pomija wartości domyślne, więc link v1 pozostaje bez zmian', () => {
+describe('hash: profil poruszania się', () => {
+  it('pomija wartości domyślne, więc link pozostaje krótki', () => {
     const hash = serializeHash(BASE);
     expect(hash).not.toMatch(/[&?](m|c|v)=/);
-    expect(parseHash(hash)).toMatchObject({ mobility: null, comfort: null, viaCoolSpot: null });
+    expect(parseHash(hash)).toMatchObject({ mobility: null });
   });
 
-  it('zapisuje i odczytuje profil, tryb komfortu i punkt chłodu', () => {
-    const hash = serializeHash({ ...BASE, mobility: 'accessible', comfort: 'sun', viaCoolSpot: true });
+  it('zapisuje i odczytuje profil', () => {
+    const hash = serializeHash({ ...BASE, mobility: 'accessible' });
     expect(hash).toContain('m=accessible');
-    expect(hash).toContain('c=sun');
-    expect(hash).toContain('v=1');
     const parsed = parseHash(`#${hash}`);
     expect(parsed.mobility).toBe('accessible');
-    expect(parsed.comfort).toBe('sun');
-    expect(parsed.viaCoolSpot).toBe(true);
     expect(parsed.from).toMatchObject({ lat: 50.0614, lon: 19.9372, label: 'Rynek Główny' });
     expect(parsed.time).toEqual({ date: '2026-07-15', minutes: 780 });
     expect(parsed.shadePreference).toBe(0.5);
   });
 
   it('odrzuca nieznane wartości', () => {
-    const parsed = parseHash('#m=rower&c=mgła&v=tak');
-    expect(parsed).toMatchObject({ mobility: null, comfort: null, viaCoolSpot: null });
-    expect(parseHash('#m=senior&c=shade&v=0')).toMatchObject({ mobility: 'senior', comfort: 'shade', viaCoolSpot: false });
+    expect(parseHash('#m=rower')).toMatchObject({ mobility: null });
+    expect(parseHash('#m=senior')).toMatchObject({ mobility: 'senior' });
+  });
+
+  it('wczytuje dawne linki z usuniętymi polami (tryb komfortu, punkt chłodu), ignorując je', () => {
+    const parsed = parseHash('#a=50.06140,19.93720&an=Rynek&b=50.05400,19.93540&bn=Wawel&d=2026-07-15&t=13:00&p=0.70&m=senior&c=sun&v=1');
+    expect(parsed).toEqual({
+      from: { lat: 50.0614, lon: 19.9372, label: 'Rynek' },
+      to: { lat: 50.054, lon: 19.9354, label: 'Wawel' },
+      time: { date: '2026-07-15', minutes: 780 },
+      shadePreference: 0.7,
+      mobility: 'senior',
+    });
+    // Zapis takiego stanu nie przywraca usuniętych pól.
+    expect(serializeHash({ ...BASE, mobility: 'senior' })).not.toMatch(/[&?](c|v)=/);
   });
 });
 
 describe('preferencje w localStorage', () => {
   it('serializacja i odczyt są wzajemnie odwrotne', () => {
-    const prefs = { mobility: 'senior', comfort: 'sun', viaCoolSpot: true } as const;
+    const prefs = { mobility: 'senior' } as const;
     expect(parsePrefs(serializePrefs(prefs))).toEqual(prefs);
   });
 
@@ -91,15 +87,17 @@ describe('preferencje w localStorage', () => {
     expect(parsePrefs(null)).toEqual(DEFAULT_PREFS);
     expect(parsePrefs('{oops')).toEqual(DEFAULT_PREFS);
     expect(parsePrefs('"tekst"')).toEqual(DEFAULT_PREFS);
-    expect(parsePrefs('{"mobility":"rower","comfort":7,"viaCoolSpot":"1"}')).toEqual(DEFAULT_PREFS);
+    expect(parsePrefs('{"mobility":"rower"}')).toEqual(DEFAULT_PREFS);
+    // Zapis ze starszej wersji (z trybem komfortu i punktem chłodu): zostaje sam profil.
+    expect(parsePrefs('{"mobility":"senior","comfort":"sun","viaCoolSpot":true}')).toEqual({ mobility: 'senior' });
   });
 
   it('korzysta z podanego magazynu i znosi jego awarię', () => {
     const data = new Map<string, string>();
     const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => void data.set(key, value) };
-    savePrefs({ mobility: 'accessible', comfort: 'shade', viaCoolSpot: false }, storage);
+    savePrefs({ mobility: 'accessible' }, storage);
     expect(data.has(PREFS_STORAGE_KEY)).toBe(true);
-    expect(loadPrefs(storage)).toEqual({ mobility: 'accessible', comfort: 'shade', viaCoolSpot: false });
+    expect(loadPrefs(storage)).toEqual({ mobility: 'accessible' });
     const broken = {
       getItem: (): string => {
         throw new Error('zablokowane');
@@ -130,21 +128,34 @@ describe('etykiety', () => {
     ]);
   });
 
-  it('opisuje światła i czas czekania', () => {
-    expect(signalsText(3, 62)).toBe('3 światła, ok. 1 min czekania');
-    expect(signalsText(1, 20)).toBe('1 światło, ok. 20 s czekania');
-    expect(signalsText(6, 185)).toBe('6 świateł, ok. 3 min czekania');
-    expect(signalsText(2, 0)).toBe('2 światła');
-    expect(signalsText(0, 0)).toBeNull();
-    expect(signalsText(undefined, undefined)).toBeNull();
+  it('opisuje światła', () => {
+    expect(signalsText(3)).toBe('3 światła');
+    expect(signalsText(1)).toBe('1 światło');
+    expect(signalsText(6)).toBe('6 świateł');
+    expect(signalsText(0)).toBeNull();
+    expect(signalsText(undefined)).toBeNull();
   });
 
   it('opisuje schody', () => {
-    expect(stairsText(0)).toBe('Bez schodów');
+    expect(stairsText(0)).toBe('bez schodów');
     expect(stairsText(1)).toBe('1 odcinek schodów');
     expect(stairsText(3)).toBe('3 odcinki schodów');
     expect(stairsText(5)).toBe('5 odcinków schodów');
     expect(stairsText(undefined)).toBeNull();
+  });
+
+  it('składa krótką linię faktów karty trasy', () => {
+    expect(routeFactsLine({ signalCrossings: 2, stairsCount: 0 })).toBe('2 światła · bez schodów');
+    expect(routeFactsLine({ signalCrossings: 0, stairsCount: 1 })).toBe('1 odcinek schodów');
+    expect(routeFactsLine({} as never)).toBe('');
+  });
+
+  it('składa jedną linię pogody', () => {
+    expect(weatherLine({ source: 'open-meteo', temperatureC: 21.6, apparentTemperatureC: 24.2 } as never)).toBe('22°C · odczuwalna 24°C');
+    expect(weatherLine({ source: 'open-meteo', temperatureC: 5, apparentTemperatureC: null } as never)).toBe('5°C');
+    expect(weatherLine({ source: 'unavailable', temperatureC: null, apparentTemperatureC: null })).toBeNull();
+    expect(weatherLine({ source: 'open-meteo', temperatureC: null, apparentTemperatureC: null } as never)).toBeNull();
+    expect(weatherLine(null)).toBeNull();
   });
 
   it('opisuje komfort cieplny', () => {
@@ -163,10 +174,8 @@ describe('etykiety', () => {
   it('odwraca znaczenie w trybie zimowym', () => {
     expect(comfortShare(0.8, 'shade')).toBeCloseTo(0.8);
     expect(comfortShare(0.8, 'sun')).toBeCloseTo(0.2);
-    expect(adverseDistanceM({ distanceM: 1000, sunDistanceM: 300 }, 'shade')).toBe(300);
-    expect(adverseDistanceM({ distanceM: 1000, sunDistanceM: 300 }, 'sun')).toBe(700);
-    expect(comfortTexts('sun').sliderMax).toBe('Maksimum słońca');
-    expect(comfortTexts('shade').sliderMax).toBe('Maksimum cienia');
+    expect(comfortTexts('sun').sliderMax).toBe('Najwięcej słońca');
+    expect(comfortTexts('shade').sliderMax).toBe('Najwięcej cienia');
     expect(preferenceLabel(1, 'sun')).toBe('maksimum słońca');
     expect(preferenceLabel(0.8, 'shade')).toBe('dużo cienia');
     expect(preferenceLabel(0.5, 'sun')).toBe('równowaga');
@@ -177,44 +186,12 @@ describe('etykiety', () => {
     expect(routeColorScale('sun')).not.toEqual(routeColorScale('shade'));
   });
 
-  it('wyjaśnia wybór trybu auto', () => {
-    expect(autoComfortBadge('auto', 'sun', { apparentTemperatureC: 4.2, temperatureC: 6 })).toBe(
-      'Tryb zimowy: szukam słońca, bo odczuwalna 4°C',
-    );
-    expect(autoComfortBadge('auto', 'shade', { apparentTemperatureC: 29, temperatureC: 27 })).toBe(
-      'Auto: szukam cienia, bo odczuwalna 29°C',
-    );
-    expect(autoComfortBadge('auto', 'sun', { apparentTemperatureC: null, temperatureC: 3 })).toBe(
-      'Tryb zimowy: szukam słońca, bo jest 3°C',
-    );
-    expect(autoComfortBadge('auto', 'sun', null)).toBe('Tryb zimowy: szukam słońca');
-    expect(autoComfortBadge('sun', 'sun', null)).toBeNull();
-    expect(autoComfortBadge('auto', undefined, null)).toBeNull();
-  });
-
-  it('rozstrzyga tryb interfejsu', () => {
-    expect(effectiveComfort({ response: null, comfort: 'auto' })).toBe('shade');
-    expect(effectiveComfort({ response: null, comfort: 'sun' })).toBe('sun');
-    const response = { comfort: 'sun' } as never;
-    expect(effectiveComfort({ response, comfort: 'auto' })).toBe('sun');
-    // Starszy serwer bez pola comfort: obowiązuje wybór użytkownika.
-    expect(effectiveComfort({ response: {} as never, comfort: 'shade' })).toBe('shade');
-  });
-
-  it('opisuje nawierzchnię, punkty chłodu i jakość danych', () => {
-    expect(surfaceLabel('paving_stones')).toBe('kostka brukowa');
-    expect(surfaceLabel('Asphalt')).toBe('asfalt');
-    expect(surfaceLabel('rubber_mat')).toBe('rubber mat');
-    expect(surfaceLabel(undefined)).toBeNull();
-    expect(coolSpotTitle({ kind: 'fountain', name: ' Fontanna na Plantach ' })).toBe('Fontanna na Plantach');
-    expect(coolSpotTitle({ kind: 'drinking_water' })).toBe('Woda pitna');
-    expect(qualityBadges({ heightSource: 'lidar', leafOff: false }).map((b) => b.label)).toEqual(['Wysokości: LiDAR']);
-    expect(qualityBadges({ heightSource: 'osm', leafOff: true }).map((b) => b.label)).toEqual([
-      'Wysokości: OSM (szacowane)',
-      'Drzewa bez liści',
-    ]);
-    expect(qualityBadges({} as never)).toEqual([]);
-    expect(qualityBadges(null)).toEqual([]);
+  it('tryb interfejsu rozstrzyga odpowiedź serwera (zawsze prosimy o auto)', () => {
+    expect(effectiveComfort({ response: null })).toBe('shade');
+    expect(effectiveComfort({ response: { comfort: 'sun' } as never })).toBe('sun');
+    expect(effectiveComfort({ response: { comfort: 'shade' } as never })).toBe('shade');
+    // Starszy serwer bez pola comfort: przyjmujemy cień.
+    expect(effectiveComfort({ response: {} as never })).toBe('shade');
   });
 });
 
@@ -280,45 +257,8 @@ describe('wykres „Kiedy wyjść?”', () => {
   });
 });
 
-function spot(id: string, kind: CoolSpot['kind'], shaded?: boolean): CoolSpot {
-  return { id, kind, lat: 50.06, lon: 19.94, shaded };
-}
-
-describe('punkty chłodu', () => {
-  it('przy nadmiarze zostawia najpierw wodę, na końcu ławki', () => {
-    const spots = [spot('b1', 'bench'), spot('b2', 'bench'), spot('w1', 'drinking_water'), spot('p1', 'park'), spot('f1', 'fountain')];
-    const capped = capCoolSpots(spots, 3);
-    expect(capped.total).toBe(5);
-    expect(capped.spots.map((s) => s.id)).toEqual(['w1', 'f1', 'p1']);
-    expect(capCoolSpots(spots).spots).toHaveLength(5);
-    expect(COOL_SPOT_LAYER_CAP).toBeGreaterThan(0);
-  });
-
-  it('pomija uszkodzone rekordy', () => {
-    const broken = [{ id: 'x', kind: 'bench', lat: Number.NaN, lon: 19.9 }, null, spot('ok', 'bench')] as CoolSpot[];
-    expect(capCoolSpots(broken).spots.map((s) => s.id)).toEqual(['ok']);
-  });
-
-  it('łączy punkty trasy i warstwy bez powtórzeń, z rolami', () => {
-    const via = spot('w1', 'drinking_water', true);
-    const route = { via, coolSpots: [via, spot('b1', 'bench', false)] } as Pick<RouteResult, 'coolSpots' | 'via'>;
-    const markers = coolSpotMarkers(route, [spot('b1', 'bench'), spot('p1', 'park')]);
-    expect(markers.map((m) => `${m.role}:${m.spot.id}`)).toEqual(['via:w1', 'route:b1', 'layer:p1']);
-    expect(markers.map(coolSpotMarkerKey)).toEqual(['via:w1:s', 'route:b1:n', 'layer:p1:u']);
-    expect(coolSpotMarkers(null, [])).toEqual([]);
-    // Odpowiedź starszego serwera bez pola coolSpots.
-    expect(coolSpotMarkers({} as never, [spot('p1', 'park')])).toHaveLength(1);
-  });
-
-  it('opisuje stan warstwy', () => {
-    expect(coolSpotLayerNote(10, 10)).toBeNull();
-    expect(coolSpotLayerNote(120, 300)).toContain('120 z 300');
-    expect(coolSpotLayerNote(0, 0)).toContain('Brak punktów chłodu');
-  });
-});
-
 describe('plan asystenta', () => {
-  it('przekłada plan na zmianę stanu', () => {
+  it('przekłada plan na zmianę stanu (tryb komfortu i punkt chłodu z planu są pomijane)', () => {
     const patch = planToPatch(
       {
         to: { lat: 50.054, lon: 19.9354, label: 'Wawel' },
@@ -340,8 +280,6 @@ describe('plan asystenta', () => {
       followNow: false,
       shadePreference: 1,
       mobility: 'senior',
-      comfort: 'shade',
-      viaCoolSpot: true,
       selectedProfile: 'shadiest',
     });
   });

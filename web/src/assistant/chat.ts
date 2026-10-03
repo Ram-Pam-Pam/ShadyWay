@@ -8,7 +8,7 @@ import type {
   RouteResult,
 } from '../../../shared/types.ts';
 import { formatDistance, formatDuration, formatPercent } from '../format.ts';
-import { COMFORT_CHOICES, MOBILITY_CHOICES, coolSpotTitle, preferenceLabel, stressLabel, thermalText } from '../labels.ts';
+import { MOBILITY_CHOICES, preferenceLabel, stressLabel, thermalText } from '../labels.ts';
 import type { AppState } from '../store.ts';
 import { formatClock, formatLongDate, instantToWallTime, wallTimeToIso } from '../time.ts';
 
@@ -61,7 +61,7 @@ export function buildRequestMessages(history: readonly ChatMessage[], limit: num
 
 type ContextState = Pick<
   AppState,
-  'from' | 'to' | 'date' | 'minutes' | 'shadePreference' | 'mobility' | 'comfort' | 'userLocation'
+  'from' | 'to' | 'date' | 'minutes' | 'shadePreference' | 'mobility' | 'userLocation'
 >;
 
 export function buildContext(state: ContextState): AssistantContext {
@@ -73,7 +73,8 @@ export function buildContext(state: ContextState): AssistantContext {
     time: wallTimeToIso(state.date, state.minutes),
     shadePreference: state.shadePreference,
     mobility: state.mobility,
-    comfort: state.comfort,
+    // Interfejs nie ma wyboru trybu — serwer sam rozstrzyga cień/słońce.
+    comfort: 'auto',
     userLocation: state.userLocation ? { lat: state.userLocation.lat, lon: state.userLocation.lon } : null,
   };
 }
@@ -96,7 +97,6 @@ export function suggestions(state: Pick<AppState, 'from' | 'to'>, hasRoute: bool
   const list: Suggestion[] = [
     { label: plan, prompt: plan },
     { label: 'Kiedy najlepiej wyjść?', prompt: 'Kiedy najlepiej wyjść, żeby było jak najprzyjemniej?' },
-    { label: 'Gdzie po drodze napiję się wody?', prompt: 'Gdzie po drodze napiję się wody?' },
   ];
   if (hasRoute) list.push({ label: EXPLAIN_QUESTION, prompt: null });
   return list;
@@ -116,10 +116,6 @@ export function routeBrief(route: RouteResult, comfort: 'shade' | 'sun'): string
     lines.push(`Przejścia ze światłami: ${route.signalCrossings}, szacowane czekanie ${formatDuration(route.waitS)}.`);
   }
   lines.push(`Schody: ${route.stairsCount > 0 ? route.stairsCount : 'brak'}.`);
-  if (route.via) lines.push(`Trasa prowadzi przez punkt chłodu: ${coolSpotTitle(route.via)}.`);
-  if (route.coolSpots?.length) {
-    lines.push(`Punkty chłodu przy trasie: ${route.coolSpots.slice(0, 6).map(coolSpotTitle).join(', ')}.`);
-  }
   const steps = (route.steps ?? []).slice(0, 14).map((step, index) => `${index + 1}. ${step.text}`);
   if (steps.length > 0) lines.push('Wskazówki:', ...steps);
   return lines.join('\n');
@@ -156,12 +152,9 @@ export function describePlan(plan: AssistantPlan): string[] {
     }
   }
   if (plan.mobility) parts.push(`profil: ${choiceLabel(MOBILITY_CHOICES, plan.mobility).toLocaleLowerCase('pl-PL')}`);
-  if (plan.comfort) parts.push(`tryb: ${choiceLabel(COMFORT_CHOICES, plan.comfort).toLocaleLowerCase('pl-PL')}`);
   if (typeof plan.shadePreference === 'number' && Number.isFinite(plan.shadePreference)) {
-    parts.push(`preferencja: ${preferenceLabel(Math.min(1, Math.max(0, plan.shadePreference)), plan.comfort === 'sun' ? 'sun' : 'shade')}`);
+    parts.push(`preferencja: ${preferenceLabel(Math.min(1, Math.max(0, plan.shadePreference)), 'shade')}`);
   }
-  if (plan.viaCoolSpot === true) parts.push('przez punkt chłodu');
-  if (plan.viaCoolSpot === false) parts.push('bez punktu chłodu');
   if (plan.selectProfile && PROFILE_LABELS[plan.selectProfile]) parts.push(`wariant ${PROFILE_LABELS[plan.selectProfile]}`);
   return parts;
 }

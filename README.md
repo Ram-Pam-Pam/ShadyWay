@@ -24,7 +24,7 @@ z osobnymi chodnikami (np. Aleje Trzech Wieszczów) wybiera tę stronę, która 
 - **Wskazówki krok po kroku i nawigacja** — lista manewrów po polsku, prowadzenie po GPS z automatycznym
   przeliczaniem po zejściu z trasy, komunikaty głosowe; `?demo=1` w adresie uruchamia symulację marszu.
 - **Asystent AI** (opcjonalny) — rozmowa po polsku: „Zaplanuj trasę w cieniu z AGH na Wawel dziś o 15".
-  Wymaga klucza Claude API (patrz niżej); bez klucza reszta aplikacji działa normalnie.
+  Wymaga klucza Gemini API (patrz niżej); bez klucza reszta aplikacji działa normalnie.
 - **PWA** — aplikację można zainstalować; offline pokazuje ostatnio wyznaczoną trasę i obejrzane kafle mapy.
 
 ## Uruchomienie
@@ -48,11 +48,13 @@ npm start
 |---|---|
 | `PORT` | Port serwera (domyślnie 3001). |
 | `HOST` | Adres nasłuchu (domyślnie `localhost`; `HOST=0.0.0.0` udostępnia aplikację w sieci lokalnej). |
-| `ANTHROPIC_API_KEY` | Klucz Claude API — włącza asystenta AI. Bez niego `/api/assistant/status` zwraca `available: false`, a interfejs pokazuje informację, że asystent jest niedostępny. |
-| `CIEN_AI_MODEL` | Model asystenta (domyślnie `claude-sonnet-5-5`); można wskazać inny model Claude, np. mocniejszy `claude-fable-5-1`. |
-| `CIEN_AI_EFFORT` | Nakład rozumowania modelu: `low`, `medium` (domyślnie), `high`, `xhigh`, `max`. |
+| `GEMINI_API_KEY` | Klucz Gemini API (Google AI Studio, aistudio.google.com) — włącza asystenta AI; zamiennie `GOOGLE_API_KEY`. Bez niego `/api/assistant/status` zwraca `available: false`, a interfejs pokazuje informację, że asystent jest niedostępny. |
+| `CIEN_AI_MODEL` | Model asystenta (domyślnie `gemini-3.8-flash`); można wskazać inny model Gemini, np. tańszy `gemini-3.5-flash-lite`. |
 | `CIEN_LIDAR` | `off` wyłącza dane LiDAR — model cienia korzysta wtedy tylko z OSM (do porównań i diagnostyki). |
 | `CIEN_LIDAR_BUDGET_MS` | Ile najdłużej zapytanie o trasę czeka na pobranie brakujących kafli LiDAR (domyślnie 25 000 ms). |
+
+Zmienne można wpisać do pliku `.env` w katalogu projektu (wzór: `.env.example`) — `npm start` i `npm run dev`
+wczytują go przy starcie. Plik `.env` jest w `.gitignore`; po zmianie klucza trzeba zrestartować serwer.
 
 ### Polecenia
 
@@ -107,7 +109,7 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 8. **Warstwa cieni** — wielokąty cieni liczone są kaflami ok. 360 m na stałej siatce i zapamiętywane.
    Cienie budynków to rzuty obrysów, cienie drzew i terenu to zwektoryzowana maska rastrowa (komórki 2,5 m).
    Jedno zapytanie obejmuje najwyżej ok. 4 km².
-9. **Asystent AI** — model Claude z narzędziami (geokodowanie, plan trasy, najlepsza godzina, punkty chłodu,
+9. **Asystent AI** — model Gemini (Google) z narzędziami (geokodowanie, plan trasy, najlepsza godzina, punkty chłodu,
    pogoda), które wywołują tę samą logikę co API (`server/service.ts`); odpowiedź płynie strumieniem SSE,
    a gotowy plan interfejs stosuje na mapie (`server/ai`).
 
@@ -142,7 +144,7 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 - **Nawigacja** w przeglądarce zależy od GPS telefonu; komunikaty głosowe i blokada wygaszania ekranu
   działają tylko w przeglądarkach, które je obsługują. Offline dostępna jest tylko ostatnia trasa.
 - **Asystent AI** był testowany automatycznie tylko z atrapą klienta API — ścieżka z prawdziwym modelem
-  wymaga klucza i nie jest pokryta testami w repozytorium. Limit: 20 zapytań na 10 minut na adres IP
+  Gemini wymaga klucza i nie była dotąd uruchamiana ani nie jest pokryta testami w repozytorium. Limit: 20 zapytań na 10 minut na adres IP
   (licznik w pamięci procesu; za serwerem pośredniczącym wszyscy użytkownicy dzielą jeden licznik).
 - Pamięć: serwer z wczytanym centrum (OSM + LiDAR + sceny cieni) zajmuje kilkaset MB RAM.
 - Tryb „Teraz" podąża za zegarem (co minutę i po powrocie do karty), z dokładnością do 15 minut.
@@ -151,10 +153,10 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 
 - **Asystent AI**: treść rozmowy z asystentem oraz kontekst planowania (punkty startu i celu, wybrana
   godzina, preferencje, a jeśli udostępniono lokalizację — także pozycja GPS) są wysyłane przez serwer
-  aplikacji do API firmy Anthropic (model Claude) w celu wygenerowania odpowiedzi. Nie wpisuj tam danych,
-  których nie chcesz przekazywać. Aplikacja nie zapisuje rozmów na serwerze; przechowywanie po stronie
-  Anthropic zależy od ustawień konta, do którego należy klucz API. Bez klucza `ANTHROPIC_API_KEY` asystent
-  jest wyłączony i nic nie jest wysyłane.
+  aplikacji do Gemini API firmy Google w celu wygenerowania odpowiedzi. Nie wpisuj tam danych,
+  których nie chcesz przekazywać. Aplikacja nie zapisuje rozmów na serwerze; przechowywanie i wykorzystanie
+  danych po stronie Google zależy od warunków Gemini API i rodzaju konta, do którego należy klucz (warunki
+  darmowego i płatnego poziomu różnią się — sprawdź aktualne zasady Google). Bez klucza `GEMINI_API_KEY` asystent jest wyłączony i nic nie jest wysyłane.
 - Pozostałe funkcje: zapytania o adresy trafiają do geokodera (Photon / Nominatim), o pogodę — do
   Open-Meteo (tylko godzina, bez pozycji użytkownika), podkład mapy pobiera przeglądarka z OpenFreeMap.
   Preferencje i ostatnia trasa są zapisywane wyłącznie w przeglądarce (localStorage).
@@ -169,9 +171,9 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 | Pogoda | Open-Meteo (prognoza i archiwum) | CC BY 4.0 |
 | Podkład mapy | OpenFreeMap (dane OpenStreetMap) | ODbL 1.0 |
 | Wyszukiwanie adresów | Photon (komoot), zapasowo Nominatim; dane OpenStreetMap | ODbL 1.0 |
-| Asystent AI | Claude API (Anthropic) | usługa płatna, wymaga własnego klucza |
+| Asystent AI | Gemini API (Google) | wymaga własnego klucza; darmowy poziom z limitami albo płatność według zużycia |
 
-Atrybucja źródeł (w tym GUGiK) jest widoczna na mapie. Usługi zewnętrzne poza Claude API są publiczne
+Atrybucja źródeł (w tym GUGiK) jest widoczna na mapie. Usługi zewnętrzne poza Gemini API są publiczne
 i darmowe — prosimy korzystać z nich z umiarem (aplikacja zapisuje pobrane dane lokalnie i ogranicza liczbę
 zapytań; usługa NMPT GUGiK jest odpytywana najwyżej dwoma zapytaniami naraz).
 
@@ -199,7 +201,7 @@ server/osm          pobieranie i parsowanie OSM, cache kafli
 server/lidar        klient WCS GUGiK, rastry wysokości, cache kafli LiDAR
 server/shade        model cienia, kafle warstwy cieni
 server/graph        graf pieszy, trasy, wskazówki, komfort cieplny, godzina wyjścia
-server/ai           asystent AI (Claude API, narzędzia, SSE)
+server/ai           asystent AI (Gemini API, narzędzia, SSE)
 server/heat         siatka LST i nakładka PNG
 server/weather      pogoda (Open-Meteo)
 web/                frontend (Vite + MapLibre GL): planowanie, nawigacja, asystent, PWA

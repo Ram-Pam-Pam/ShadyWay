@@ -3,8 +3,7 @@
 
 import type { DepartureRequest, DepartureResponse } from '../../../shared/types.ts';
 import { errorMessage, fetchDeparture, isAbortError } from '../api.ts';
-import { bestOptionIndex, buildChart, optionIndexAt, shadeColor, type ChartBar } from '../departureChart.ts';
-import { cssGradient } from '../format.ts';
+import { bestOptionIndex, buildChart, optionIndexAt, type ChartBar } from '../departureChart.ts';
 import type { AppliedComfort } from '../labels.ts';
 import { byId, debounce, el } from '../util.ts';
 import { icon } from '../ui/icons.ts';
@@ -112,14 +111,14 @@ export class DepartureFeature {
     const children: (HTMLElement | null)[] = [this.windowControl()];
 
     if (!this.options.getRequest()) {
-      children.push(el('p', 'hint departure__hint', 'Wskaż start i cel, aby sprawdzić, o której najlepiej wyjść.'));
+      // Bez startu i celu przycisk „Kiedy wyjść?” jest ukryty — nie ma czego pokazać.
     } else if (status.kind === 'loading' || status.kind === 'idle') {
       children.push(
         el(
           'div',
           'status status--loading',
           el('span', 'spinner'),
-          el('p', '', `Sprawdzam trasę dla kolejnych godzin (okno ${this.windowHours} h)…`),
+          el('p', '', 'Sprawdzam kolejne godziny…'),
         ),
       );
     } else if (status.kind === 'error') {
@@ -140,13 +139,13 @@ export class DepartureFeature {
   }
 
   private windowControl(): HTMLElement {
-    const group = el('div', 'departure__window', el('span', 'field-label', 'Okno czasu od wybranej godziny'));
-    group.setAttribute('role', 'group');
-    group.setAttribute('aria-label', 'Długość okna czasu');
     const chips = el('div', 'departure__chips');
+    chips.setAttribute('role', 'group');
+    chips.setAttribute('aria-label', 'Okno czasu od wybranej godziny');
     for (const hours of WINDOW_CHOICES) {
       const chip = el('button', 'chip-button chip-button--small', `${hours} h`);
       chip.type = 'button';
+      chip.setAttribute('aria-label', `Najbliższe ${hours} godzin`);
       chip.setAttribute('aria-pressed', String(hours === this.windowHours));
       chip.addEventListener('click', () => {
         if (hours === this.windowHours) return;
@@ -155,8 +154,7 @@ export class DepartureFeature {
       });
       chips.append(chip);
     }
-    group.append(chips);
-    return group;
+    return chips;
   }
 
   private chart(response: DepartureResponse): HTMLElement[] {
@@ -184,16 +182,7 @@ export class DepartureFeature {
     const summary = summaryText ? el('p', 'departure__summary', icon('clock'), el('span', '', summaryText)) : null;
     summary?.setAttribute('role', 'status');
 
-    const ramp = el('span', 'dchart__ramp');
-    ramp.style.background = cssGradient([shadeColor(0), shadeColor(1)]);
-    const caption = el(
-      'p',
-      'dchart__caption',
-      el('span', '', 'Wysokość słupka: ocena komfortu (0–100). Kolor: udział cienia'),
-      el('span', 'dchart__ramp-wrap', el('span', '', 'mało'), ramp, el('span', '', 'dużo')),
-    );
-
-    const nodes: (HTMLElement | null)[] = [summary, chart, readout, caption];
+    const nodes: (HTMLElement | null)[] = [summary, chart, readout];
     return nodes.filter((node): node is HTMLElement => node !== null);
   }
 

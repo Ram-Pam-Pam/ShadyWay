@@ -10,9 +10,9 @@ import { debounce, type Debounced } from '../util.ts';
 const SHADOWS_DEBOUNCE_MS = 250;
 
 function shadowHintFor(night: boolean, missingData: boolean, partial: boolean): string | null {
-  if (night) return 'Słońce jest pod horyzontem — brak cieni';
-  if (missingData) return 'Brak danych o cieniach dla części tej okolicy — wyznacz tu trasę, aby je pobrać';
-  if (partial) return 'Cienie pokazujemy tylko w środku widoku — przybliż mapę, aby zobaczyć je wszędzie';
+  if (night) return 'Słońce pod horyzontem — brak cieni';
+  if (missingData) return 'Brak danych o cieniach w części tej okolicy';
+  if (partial) return 'Przybliż, aby zobaczyć wszystkie cienie';
   return null;
 }
 

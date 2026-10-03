@@ -127,8 +127,8 @@ export function parseAssistantTime(raw: string): Date {
 const B = KRAKOW_BBOX;
 
 /**
- * Stała część promptu systemowego. NIE interpoluj tu niczego zmiennego — każda zmiana bajtu unieważnia
- * cache promptu (narzędzia + ten blok).
+ * Stała część promptu systemowego. NIE interpoluj tu niczego zmiennego — stały początek zapytania pozwala
+ * dostawcy modelu cache'ować prefiks (ten blok + narzędzia); część zmienna jest doklejana za nim.
  */
 export const ASSISTANT_SYSTEM_PROMPT = `Jesteś „Asystentem Cienia” — pomocnikiem w aplikacji „Cień”, która prowadzi pieszych po Krakowie tak, żeby szli jak najwięcej w cieniu (latem) albo w słońcu (zimą). Rozmawiasz z osobą, która planuje konkretne przejście po mieście; twoim zadaniem jest zaplanować je narzędziami aplikacji i krótko, konkretnie wyjaśnić wynik.
 

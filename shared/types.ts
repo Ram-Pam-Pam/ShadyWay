@@ -278,7 +278,7 @@ export interface AssistantStatus {
   available: boolean;
   /** Model używany przez asystenta (gdy dostępny). */
   model?: string;
-  /** Powód niedostępności po polsku (np. brak klucza ANTHROPIC_API_KEY). */
+  /** Powód niedostępności po polsku (np. brak klucza GEMINI_API_KEY). */
   reason?: string;
 }
 

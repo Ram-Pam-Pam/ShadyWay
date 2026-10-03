@@ -1,18 +1,16 @@
-// Preferencje użytkownika pamiętane w localStorage (profil poruszania się, tryb komfortu, punkt chłodu).
+// Preferencje użytkownika pamiętane w localStorage (profil poruszania się).
 // Link z hashem ma pierwszeństwo; pamięć lokalna wypełnia to, czego link nie podaje.
 
-import type { ComfortMode, MobilityProfile } from '../../shared/types.ts';
-import { parseComfort, parseMobility } from './hash.ts';
+import type { MobilityProfile } from '../../shared/types.ts';
+import { parseMobility } from './hash.ts';
 
 export interface StoredPrefs {
   mobility: MobilityProfile;
-  comfort: ComfortMode;
-  viaCoolSpot: boolean;
 }
 
 export const PREFS_STORAGE_KEY = 'cien:prefs:v2';
 
-export const DEFAULT_PREFS: StoredPrefs = { mobility: 'default', comfort: 'auto', viaCoolSpot: false };
+export const DEFAULT_PREFS: StoredPrefs = { mobility: 'default' };
 
 /** Odczyt zapisanych preferencji; uszkodzony lub obcy zapis daje wartości domyślne. */
 export function parsePrefs(raw: string | null | undefined): StoredPrefs {
@@ -25,15 +23,11 @@ export function parsePrefs(raw: string | null | undefined): StoredPrefs {
   }
   if (typeof value !== 'object' || value === null) return { ...DEFAULT_PREFS };
   const record = value as Record<string, unknown>;
-  return {
-    mobility: parseMobility(record.mobility) ?? DEFAULT_PREFS.mobility,
-    comfort: parseComfort(record.comfort) ?? DEFAULT_PREFS.comfort,
-    viaCoolSpot: record.viaCoolSpot === true,
-  };
+  return { mobility: parseMobility(record.mobility) ?? DEFAULT_PREFS.mobility };
 }
 
 export function serializePrefs(prefs: StoredPrefs): string {
-  return JSON.stringify({ mobility: prefs.mobility, comfort: prefs.comfort, viaCoolSpot: prefs.viaCoolSpot });
+  return JSON.stringify({ mobility: prefs.mobility });
 }
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;

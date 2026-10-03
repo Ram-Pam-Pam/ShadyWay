@@ -31,7 +31,7 @@ export interface App {
   sheet: Sheet;
   /** Zakładki panelu; `tabs.enableAssistant()` pokazuje zakładkę „Asystent” (zawartość: #assistant-panel). */
   tabs: PanelTabs;
-  /** `routeList.setNavigationHandler(fn)` pokazuje przycisk „Rozpocznij nawigację” na wybranej trasie. */
+  /** `routeList.setNavigationHandler(fn)` pokazuje przycisk „Nawiguj” na wybranej trasie. */
   routeList: RouteList;
   actions: AppActions;
 }

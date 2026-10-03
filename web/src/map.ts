@@ -19,7 +19,6 @@ import type { Feature, FeatureCollection, LineString } from 'geojson';
 import {
   KRAKOW_BBOX,
   KRAKOW_CENTER,
-  type CoolSpot,
   type HeatMeta,
   type LatLon,
   type LonLat,
@@ -28,7 +27,6 @@ import {
   type RouteSegment,
 } from '../../shared/types.ts';
 import { HEAT_OVERLAY_URL, type ShadowCollection } from './api.ts';
-import { coolSpotMarkerKey, type CoolSpotMarker, type CoolSpotRole } from './coolSpots.ts';
 import { routeColorScale } from './format.ts';
 import type { EndpointKey } from './store.ts';
 
@@ -39,8 +37,7 @@ const BASE_STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 
 const BOUNDS_MARGIN_DEG = 0.06;
 const HIT_TOLERANCE_PX = 7;
-/** Poniżej tego przybliżenia znaczniki punktów chłodu są pomniejszane (klasa map--far). */
-const FAR_ZOOM = 14.5;
+const NARROW_QUERY = '(max-width: 719px)';
 const SHADOW_COLOR = '#1e1b4b';
 const ALT_ROUTE_COLOR = '#7b7e98';
 
@@ -97,10 +94,6 @@ export interface MapViewOptions {
   onViewChange(): void;
   /** Treść dymka dla odcinka wybranej trasy. */
   describeSegment(segment: RouteSegment): HTMLElement;
-  /** Element znacznika punktu chłodu (przycisk z ikoną). */
-  createCoolSpotElement(spot: CoolSpot, role: CoolSpotRole): HTMLElement;
-  /** Treść dymka punktu chłodu. */
-  describeCoolSpot(spot: CoolSpot, role: CoolSpotRole): HTMLElement;
   /** Margines na elementy interfejsu zasłaniające mapę (np. dolny arkusz na telefonie). */
   getPadding(): PaddingOptions;
 }
@@ -164,9 +157,6 @@ export class MapView {
   private buildingSourceId: string | null = null;
   private segments: RouteSegment[] = [];
   private hoveredSegment = -1;
-  private readonly spotPopup = new Popup({ closeButton: true, closeOnClick: true, offset: 18, className: 'segment-popup' });
-  /** Znaczniki punktów chłodu wg klucza (rola + id + stan cienia). */
-  private readonly spotMarkers = new Map<string, Marker>();
   private stepMarker: Marker | null = null;
   private comfort: 'shade' | 'sun' = 'shade';
   private userMarker: Marker | null = null;
@@ -195,25 +185,22 @@ export class MapView {
 
     this.map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
     this.map.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left');
-    this.map.addControl(
-      new AttributionControl({
-        compact: true,
-        customAttribution: [
-          'Wysokości (LiDAR): NMT/NMPT © <a href="https://www.geoportal.gov.pl/" target="_blank" rel="noopener">GUGiK</a>',
-          'LST: Landsat (USGS)',
-          'Pogoda: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>',
-        ],
-      }),
-      'bottom-right',
-    );
+    const attribution = new AttributionControl({
+      compact: true,
+      customAttribution: [
+        'Wysokości (LiDAR): NMT/NMPT © <a href="https://www.geoportal.gov.pl/" target="_blank" rel="noopener">GUGiK</a>',
+        'LST: Landsat (USGS)',
+        'Pogoda: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>',
+      ],
+    });
+    this.map.addControl(attribution, 'bottom-right');
+    // Na telefonie podpis źródeł startuje zwinięty do przycisku „i” (rozwinięty zasłaniałby mapę nad arkuszem).
+    if (window.matchMedia(NARROW_QUERY).matches) {
+      options.container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
+    }
 
     this.map.on('load', () => this.handleLoad());
     this.map.on('moveend', () => this.options.onViewChange());
-    const syncFar = (): void => {
-      this.map.getContainer().classList.toggle('map--far', this.map.getZoom() < FAR_ZOOM);
-    };
-    this.map.on('zoom', syncFar);
-    syncFar();
     this.map.on('click', (event) => this.handleClick(event));
     this.map.on('mousemove', (event) => this.handleMouseMove(event));
     this.map.on('mouseout', () => this.clearHover());
@@ -291,7 +278,6 @@ export class MapView {
     this.map.easeTo({ bearing: 0, pitch, duration: 500 });
   }
 
-
   /** true, gdy podkład ma warstwę budynków z wysokościami (dostępne po załadowaniu stylu). */
   whenReady(callback: (info: { hasBuildings: boolean }) => void): void {
     this.run(() => callback({ hasBuildings: this.buildingSourceId !== null }));
@@ -308,46 +294,11 @@ export class MapView {
     return [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
   }
 
-  getZoom(): number {
-    return this.map.getZoom();
-  }
-
   /** Tryb komfortu zmienia skalę barw wybranej trasy (zimą wyróżnione są odcinki w słońcu). */
   setComfort(comfort: 'shade' | 'sun'): void {
     if (comfort === this.comfort) return;
     this.comfort = comfort;
     this.run(() => this.map.setPaintProperty(LAYER.routeLine, 'line-color', sunColorExpression(comfort)));
-  }
-
-  /** Rysuje znaczniki punktów chłodu; niezmienione znaczniki zostają na miejscu (bez migotania przy ruchu mapy). */
-  setCoolSpots(markers: readonly CoolSpotMarker[]): void {
-    const wanted = new Map(markers.map((marker) => [coolSpotMarkerKey(marker), marker]));
-    for (const [key, marker] of this.spotMarkers) {
-      if (wanted.has(key)) continue;
-      marker.remove();
-      this.spotMarkers.delete(key);
-    }
-    for (const [key, { spot, role }] of wanted) {
-      if (this.spotMarkers.has(key)) continue;
-      const element = this.options.createCoolSpotElement(spot, role);
-      element.addEventListener('click', (event) => {
-        // Kliknięcie znacznika nie jest kliknięciem mapy (nie ustawia punktu trasy ani nie zamyka dymka).
-        event.stopPropagation();
-        this.hoverPopup.remove();
-        this.pinnedPopup.remove();
-        this.spotPopup
-          .setLngLat([spot.lon, spot.lat])
-          .setDOMContent(this.options.describeCoolSpot(spot, role))
-          .addTo(this.map);
-      });
-      const marker = new Marker({ element, anchor: 'center' }).setLngLat([spot.lon, spot.lat]).addTo(this.map);
-      this.spotMarkers.set(key, marker);
-    }
-    if (this.spotPopup.isOpen() && markers.length === 0) this.spotPopup.remove();
-  }
-
-  closeSpotPopup(): void {
-    this.spotPopup.remove();
   }
 
   /** Podświetla punkt na mapie (miejsce kroku nawigacji); null zdejmuje podświetlenie. */
@@ -673,7 +624,7 @@ export class MapView {
 
   private handleClick(event: MapMouseEvent): void {
     const target = event.originalEvent.target;
-    if (target instanceof Element && target.closest('.pin, .spot, .step-marker, .puck')) return;
+    if (target instanceof Element && target.closest('.pin, .step-marker, .puck')) return;
 
     const segmentIndex = this.segmentAt(event);
     if (segmentIndex >= 0) {

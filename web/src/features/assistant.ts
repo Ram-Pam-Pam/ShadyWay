@@ -77,7 +77,7 @@ export function installAssistant(app: App): AssistantHandle {
 
   // ───────────── szkielet ─────────────
 
-  const subtitle = el('p', 'assistant__sub', 'Zapytaj o trasę, cień, pogodę albo wodę po drodze');
+  const subtitle = el('p', 'assistant__sub', 'Zapytaj o trasę, cień albo pogodę');
   const reset = el('button', 'chip-button chip-button--small', icon('plus'), el('span', '', 'Nowa rozmowa'));
   reset.type = 'button';
   reset.hidden = true;
@@ -144,7 +144,7 @@ export function installAssistant(app: App): AssistantHandle {
     submit.disabled = input.value.trim() === '';
     mic.disabled = busy();
     if (availability.state === 'ready' && availability.status.available && availability.status.model) {
-      subtitle.textContent = `Zapytaj o trasę, cień, pogodę albo wodę po drodze · ${availability.status.model}`;
+      subtitle.textContent = `Zapytaj o trasę, cień albo pogodę · ${availability.status.model}`;
     }
   }
 

@@ -1,17 +1,20 @@
 // „Asystent Cienia”: endpointy GET /api/assistant/status i POST /api/assistant (Server-Sent Events).
 //
-// Asystent to pętla agenta na Claude API: model planuje narzędziami z tools.ts (geokodowanie, trasa,
-// najlepsza godzina, punkty chłodu, pogoda, pokazanie planu na mapie), a serwer strumieniuje do UI
-// zdarzenia AssistantEvent. Konfiguracja wyłącznie ze zmiennych środowiskowych:
+// Asystent to pętla agenta na Gemini API (Google): model planuje narzędziami z tools.ts (geokodowanie,
+// trasa, najlepsza godzina, punkty chłodu, pogoda, pokazanie planu na mapie), a serwer strumieniuje do UI
+// zdarzenia AssistantEvent. Konfiguracja wyłącznie ze zmiennych środowiskowych (skrypty npm wczytują
+// plik .env z katalogu projektu):
 //
-//   ANTHROPIC_API_KEY   klucz Claude API (wymagany; alternatywnie ANTHROPIC_AUTH_TOKEN). Bez niego
-//                       status = { available: false }, a POST odpowiada 503 DATA_UNAVAILABLE.
-//   CIEN_AI_MODEL       identyfikator modelu (domyślnie DEFAULT_MODEL poniżej).
-//   CIEN_AI_EFFORT      low | medium | high | xhigh | max (domyślnie medium) — głębokość namysłu modelu.
-//   CIEN_AI_FALLBACKS   „off” wyłącza serwerowy fallback przy odmowie klasyfikatora bezpieczeństwa.
+//   GEMINI_API_KEY   klucz Gemini API z aistudio.google.com (wymagany; alternatywnie GOOGLE_API_KEY).
+//                    Bez niego status = { available: false }, a POST odpowiada 503 DATA_UNAVAILABLE.
+//   CIEN_AI_MODEL    identyfikator modelu (domyślnie DEFAULT_MODEL poniżej).
+//
+// Używamy oficjalnego SDK @google/genai i metody generateContentStream (bezstanowej: cała historia idzie
+// w każdym zapytaniu). Dokumentacja poleca dla nowych projektów nowsze Interactions API, ale generateContent
+// „remains fully supported” (https://ai.google.dev/gemini-api/docs/interactions, sprawdzone 2026-10-04).
 
-import Anthropic from '@anthropic-ai/sdk';
-import type { BetaMessageStreamParams } from '@anthropic-ai/sdk/resources/beta/messages/messages';
+import { FunctionCallingConfigMode, GoogleGenAI } from '@google/genai';
+import type { Content, GenerateContentParameters, GenerateContentResponse, Part } from '@google/genai';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { KRAKOW_BBOX } from '../../shared/types.ts';
@@ -31,29 +34,24 @@ import { executeTool, TOOL_DEFINITIONS, toolLabel } from './tools.ts';
 // ───────────────────────── konfiguracja ─────────────────────────
 
 /**
- * Domyślny model: Claude Sonnet 5.5 — tani i szybki; koszt ma tu znaczenie, bo endpoint jest publiczny.
- * Najzdolniejszy jest claude-fable-5-1 (10 USD / 50 USD za milion tokenów wejścia/wyjścia), ale wymaga 30-dniowej retencji danych w organizacji (konta z „zero data retention” dostają
- * błąd 400) i bywa wolniejszy. Inne modele przez CIEN_AI_MODEL:
- *   claude-opus-5-5    4/20 USD — bardzo dobry kompromis jakości i ceny, zalecany przy stałym ruchu,
- *   claude-sonnet-5-5  2/10 USD — szybszy, rozsądny wybór przy dużym ruchu,
- *   claude-haiku-4-5   1/5 USD — najtańszy; bez adaptacyjnego namysłu, słabiej planuje wieloetapowe zapytania.
+ * Domyślny model: Gemini 3.8 Flash — bieżący stabilny model klasy „flash”; to jego używają przykłady
+ * wywoływania funkcji w dokumentacji. Wybór na podstawie (sprawdzone 2026-10-04):
+ *   https://ai.google.dev/gemini-api/docs/models            — lista modeli; „gemini-3.8-flash” ma status Stable,
+ *   https://ai.google.dev/gemini-api/docs/function-calling  — przykłady function calling na „gemini-3.8-flash”,
+ *   https://ai.google.dev/gemini-api/docs/pricing           — 0,75 / 3,75 USD za milion tokenów wejścia/wyjścia
+ *                                                             do 31.12.2026 (potem 1,50 / 7,50); jest darmowy poziom.
+ * Tańsza alternatywa przez CIEN_AI_MODEL: gemini-3.5-flash-lite (0,30 / 2,50 USD) — może słabiej planować
+ * wieloetapowe zapytania z narzędziami.
  */
-export const DEFAULT_MODEL = 'claude-sonnet-5-5';
-
-type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-const DEFAULT_EFFORT: Effort = 'medium';
-
-/** Modele, dla których API przyjmuje serwerowy fallback po odmowie klasyfikatora (fallbacks: "default"). */
-const FALLBACK_MODELS = new Set(['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5']);
-const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+export const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 /** Najwyżej tyle rund narzędziowych na jedno zapytanie; potem model musi odpowiedzieć bez narzędzi. */
 export const MAX_TOOL_ROUNDS = 8;
 const MAX_TOOLS_PER_ROUND = 6;
 /** Limit tokenów jednej odpowiedzi modelu (obejmuje też namysł); odpowiedzi asystenta są krótkie. */
-const MAX_TOKENS = 4096;
-const MAX_JSON_RETRIES = 2;
+export const MAX_OUTPUT_TOKENS = 4096;
+/** Tyle razy ponawiamy rundę, w której model wygenerował niepoprawne wywołanie funkcji. */
+const MAX_MALFORMED_RETRIES = 2;
 
 /** Limity danych od klienta. */
 export const LIMITS = {
@@ -72,44 +70,36 @@ type Env = Record<string, string | undefined>;
 export interface AssistantConfig {
   available: boolean;
   model: string;
-  effort: Effort;
-  fallbacks: boolean;
   reason?: string;
+}
+
+/** Klucz Gemini API z otoczenia: GEMINI_API_KEY, a gdy go nie ma — GOOGLE_API_KEY. */
+function apiKeyFrom(env: Env): string | undefined {
+  return env.GEMINI_API_KEY?.trim() || env.GOOGLE_API_KEY?.trim() || undefined;
 }
 
 export function resolveConfig(env: Env = process.env): AssistantConfig {
   const model = env.CIEN_AI_MODEL?.trim() || DEFAULT_MODEL;
-  const effortRaw = env.CIEN_AI_EFFORT?.trim().toLowerCase() as Effort | undefined;
-  const effort = effortRaw && EFFORTS.includes(effortRaw) ? effortRaw : DEFAULT_EFFORT;
-  const fallbacks = FALLBACK_MODELS.has(model) && !/^(off|0|false|no)$/i.test(env.CIEN_AI_FALLBACKS?.trim() ?? '');
-  const hasCredentials = Boolean(env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_AUTH_TOKEN?.trim());
-  if (!hasCredentials) {
+  if (!apiKeyFrom(env)) {
     return {
       available: false,
       model,
-      effort,
-      fallbacks,
       reason:
-        'Asystent AI jest wyłączony: brak klucza Claude API. Ustaw zmienną środowiskową ANTHROPIC_API_KEY ' +
-        '(klucz z console.anthropic.com) i uruchom serwer ponownie.',
+        'Asystent AI jest wyłączony: brak klucza Gemini API. Wpisz GEMINI_API_KEY=… (klucz z aistudio.google.com) ' +
+        'do pliku .env w katalogu projektu i uruchom serwer ponownie.',
     };
   }
-  return { available: true, model, effort, fallbacks };
+  return { available: true, model };
 }
 
 // ───────────────────────── klient (wstrzykiwalny) ─────────────────────────
 
-type StreamParams = BetaMessageStreamParams;
+/** Fragment strumienia odpowiedzi, którego używa pętla — tyle musi udawać atrapa w testach. */
+export type AssistantChunk = Pick<GenerateContentResponse, 'candidates' | 'promptFeedback' | 'usageMetadata'>;
 
-/** Minimalny wycinek strumienia SDK, którego używa pętla — tyle musi udawać atrapa w testach. */
-export interface AssistantStream {
-  on(event: 'text', listener: (delta: string) => void): unknown;
-  finalMessage(): Promise<Anthropic.Beta.BetaMessage>;
-}
-
-/** Minimalny wycinek klienta Anthropic SDK (client.beta.messages.stream). */
+/** Minimalny wycinek klienta @google/genai (ai.models.generateContentStream). */
 export interface AssistantClient {
-  beta: { messages: { stream(params: StreamParams, options?: { signal?: AbortSignal }): AssistantStream } };
+  models: { generateContentStream(params: GenerateContentParameters): Promise<AsyncIterable<AssistantChunk>> };
 }
 
 // ───────────────────────── walidacja zapytania ─────────────────────────
@@ -255,44 +245,54 @@ export function createRateLimiter(max: number, windowMs: number, clock: () => nu
   };
 }
 
-// ───────────────────────── błędy SDK → komunikaty ─────────────────────────
+// ───────────────────────── błędy API → komunikaty ─────────────────────────
 
 const GENERIC_ERROR = 'Asystent napotkał nieoczekiwany błąd. Spróbuj ponownie za chwilę.';
+const REFUSAL_MESSAGE = 'Nie mogę pomóc w tej prośbie. Zapytaj o trasę, cień, pogodę albo wodę po drodze w Krakowie.';
+
+/** Kod HTTP błędu API (ApiError z @google/genai ma pole `status`); undefined dla błędów sieci i innych. */
+function httpStatusOf(err: unknown): number | undefined {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === 'number' && Number.isFinite(status) ? status : undefined;
+}
 
 /**
  * Przyjazny komunikat po polsku dla błędu wywołania modelu; null = nic nie pokazujemy (klient sam przerwał).
  * Nigdy nie zawiera treści wyjątku, klucza API ani stosu wywołań.
  */
 export function describeAssistantError(err: unknown): string | null {
-  if (err instanceof Anthropic.APIUserAbortError) return null;
-  if (err instanceof Anthropic.AuthenticationError) {
-    return 'Asystent jest błędnie skonfigurowany: klucz API został odrzucony. Administrator powinien sprawdzić ANTHROPIC_API_KEY.';
-  }
-  if (err instanceof Anthropic.PermissionDeniedError) {
-    return 'Klucz API asystenta nie ma dostępu do wybranego modelu. Administrator powinien sprawdzić ustawienia konta lub CIEN_AI_MODEL.';
-  }
-  if (err instanceof Anthropic.NotFoundError) {
-    return 'Wybrany model asystenta nie jest dostępny. Administrator powinien sprawdzić zmienną CIEN_AI_MODEL.';
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Asystent obsługuje teraz zbyt wiele zapytań. Spróbuj ponownie za minutę.';
-  }
-  if (err instanceof Anthropic.APIConnectionTimeoutError) {
-    return 'Usługa AI nie odpowiedziała na czas. Spróbuj ponownie za chwilę.';
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Nie udało się połączyć z usługą AI. Sprawdź połączenie serwera z internetem i spróbuj ponownie.';
-  }
-  if (err instanceof Anthropic.APIError) {
-    if (err instanceof Anthropic.InternalServerError || err.type === 'overloaded_error' || err.type === 'api_error') {
+  const name = err instanceof Error ? err.name : '';
+  const text = err instanceof Error ? err.message : '';
+  if (name === 'AbortError') return null;
+  const status = httpStatusOf(err);
+  if (status !== undefined) {
+    // Gemini API odrzuca zły klucz kodem 400 („API key not valid”), nie 401 — rozpoznajemy oba przypadki.
+    if (status === 401 || (status === 400 && /api[ _]key/i.test(text))) {
+      return 'Asystent jest błędnie skonfigurowany: klucz API został odrzucony. Administrator powinien sprawdzić GEMINI_API_KEY w pliku .env.';
+    }
+    if (status === 403) {
+      return 'Klucz API asystenta nie ma dostępu do usługi lub wybranego modelu. Administrator powinien sprawdzić GEMINI_API_KEY i CIEN_AI_MODEL.';
+    }
+    if (status === 404) {
+      return 'Wybrany model asystenta nie jest dostępny. Administrator powinien sprawdzić zmienną CIEN_AI_MODEL.';
+    }
+    if (status === 429) {
+      return 'Limit zapytań do usługi AI został wyczerpany. Spróbuj ponownie za minutę.';
+    }
+    if (status >= 500) {
       return 'Usługa AI jest chwilowo przeciążona. Spróbuj ponownie za chwilę.';
     }
-    if (err.type === 'billing_error') {
-      return 'Konto usługi AI wymaga uwagi administratora (rozliczenia). Asystent jest chwilowo niedostępny.';
-    }
-    if (err instanceof Anthropic.BadRequestError) {
+    if (status === 400) {
       return 'Asystent nie mógł przetworzyć tej rozmowy. Zacznij nową rozmowę i spróbuj ponownie.';
     }
+    return GENERIC_ERROR;
+  }
+  if (name === 'TimeoutError' || /timed? ?out/i.test(text)) {
+    return 'Usługa AI nie odpowiedziała na czas. Spróbuj ponownie za chwilę.';
+  }
+  // Błąd sieci z fetch() to TypeError („fetch failed”).
+  if (err instanceof TypeError || /fetch failed|ECONNRE|ENOTFOUND|EAI_AGAIN/i.test(text)) {
+    return 'Nie udało się połączyć z usługą AI. Sprawdź połączenie serwera z internetem i spróbuj ponownie.';
   }
   return GENERIC_ERROR;
 }
@@ -301,9 +301,7 @@ export function describeAssistantError(err: unknown): string | null {
 
 export interface RunAssistantOptions {
   client: AssistantClient;
-  config: Pick<AssistantConfig, 'model' | 'effort'>;
-  /** Stan współdzielony między zapytaniami: fallback wyłącza się sam, gdy API odrzuci go błędem 400. */
-  fallbacks: { enabled: boolean };
+  config: Pick<AssistantConfig, 'model'>;
   messages: AssistantMessage[];
   context?: AssistantContext;
   now: Date;
@@ -312,36 +310,51 @@ export interface RunAssistantOptions {
   log?: (message: string, detail?: Record<string, unknown>) => void;
 }
 
-function buildParams(opts: RunAssistantOptions, messages: Anthropic.Beta.BetaMessageParam[], contextBlock: string, final: boolean): StreamParams {
-  // Haiku 4.5 nie obsługuje adaptacyjnego namysłu ani parametru effort; pozostałe bieżące modele — tak.
-  const adaptive = !opts.config.model.includes('haiku');
+/** Deklaracje funkcji dla Gemini; schemat narzędzia to zwykły JSON Schema, więc idzie polem parametersJsonSchema. */
+const FUNCTION_DECLARATIONS = TOOL_DEFINITIONS.map((tool) => ({
+  name: tool.name,
+  description: tool.description,
+  parametersJsonSchema: tool.parameters,
+}));
+
+/** Powody zakończenia oznaczające blokadę treści przez filtry — narzędzi z takiej tury nie wolno wykonywać. */
+const BLOCKED_FINISH = new Set(['SAFETY', 'RECITATION', 'LANGUAGE', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT']);
+const MALFORMED_FINISH = new Set(['MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL']);
+
+function buildParams(opts: RunAssistantOptions, contents: Content[], contextBlock: string, final: boolean): GenerateContentParameters {
   return {
     model: opts.config.model,
-    max_tokens: MAX_TOKENS,
-    // Kolejność renderowania to tools → system → messages: znacznik na stałym bloku systemowym cache'uje
-    // narzędzia i prompt dla wszystkich użytkowników; blok z bieżącym kontekstem leży już za nim.
-    system: [
-      { type: 'text', text: ASSISTANT_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: contextBlock },
-    ],
-    tools: TOOL_DEFINITIONS,
-    messages,
-    // Automatyczny punkt cache'owania na końcu rozmowy — kolejne rundy pętli czytają poprzednie z cache.
-    cache_control: { type: 'ephemeral' },
-    ...(adaptive ? { thinking: { type: 'adaptive' as const }, output_config: { effort: opts.config.effort } } : {}),
-    ...(opts.fallbacks.enabled ? { betas: [FALLBACK_BETA], fallbacks: 'default' as const } : {}),
-    ...(final ? { tool_choice: { type: 'none' as const } } : {}),
+    contents,
+    config: {
+      // Stały prompt na początku (wspólny prefiks dla wszystkich zapytań), bieżący kontekst za nim.
+      systemInstruction: `${ASSISTANT_SYSTEM_PROMPT}\n\n${contextBlock}`,
+      tools: [{ functionDeclarations: FUNCTION_DECLARATIONS }],
+      // AUTO: model sam wybiera tekst albo wywołania funkcji; NONE w ostatniej rundzie wymusza odpowiedź tekstową.
+      toolConfig: { functionCallingConfig: { mode: final ? FunctionCallingConfigMode.NONE : FunctionCallingConfigMode.AUTO } },
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      abortSignal: opts.signal,
+    },
   };
+}
+
+/** Wynik narzędzia w kształcie functionResponse.response: klucz „output” dla wyniku, „error” dla błędu. */
+function toolResponseBody(outcome: { content: string; isError?: boolean }): Record<string, unknown> {
+  if (outcome.isError) return { error: outcome.content };
+  try {
+    return { output: JSON.parse(outcome.content) as unknown };
+  } catch {
+    return { output: outcome.content };
+  }
 }
 
 /**
  * Pętla agenta dla jednego zapytania: strumieniuje tekst, wykonuje narzędzia, kończy się odpowiedzią modelu
  * albo po MAX_TOOL_ROUNDS rundach narzędziowych (ostatnie wywołanie modelu ma wtedy wyłączone narzędzia).
- * Emituje zdarzenia text / tool / plan / error — bez 'done' (to robi warstwa HTTP). Błędy SDK rzuca dalej.
+ * Emituje zdarzenia text / tool / plan / error — bez 'done' (to robi warstwa HTTP). Błędy API rzuca dalej.
  */
 export async function runAssistant(opts: RunAssistantOptions): Promise<void> {
   const { client, signal } = opts;
-  const messages: Anthropic.Beta.BetaMessageParam[] = opts.messages.map((m) => ({ role: m.role, content: m.content }));
+  const contents: Content[] = opts.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
   const contextBlock = buildContextBlock(opts.now, opts.context);
 
   let emittedText = false;
@@ -360,59 +373,81 @@ export async function runAssistant(opts: RunAssistantOptions): Promise<void> {
   };
 
   let toolRounds = 0;
-  let jsonRetries = 0;
+  let malformedRetries = 0;
   while (!signal.aborted) {
     const final = toolRounds >= MAX_TOOL_ROUNDS;
     let roundText = false;
-    const stream = client.beta.messages.stream(buildParams(opts, messages, contextBlock, final), { signal });
-    stream.on('text', (delta) => {
-      if (!delta) return;
-      if (!roundText && emittedText) emit({ type: 'text', delta: '\n\n' });
-      roundText = true;
-      emittedText = true;
-      emit({ type: 'text', delta });
-    });
-
-    let message: Anthropic.Beta.BetaMessage;
+    // Części odpowiedzi modelu zachowujemy DOSŁOWNIE (razem z polami thoughtSignature) i odsyłamy w historii
+    // kolejnej rundy — modele Gemini 3 wymagają zwrotu sygnatur namysłu przy wywoływaniu funkcji
+    // (https://ai.google.dev/gemini-api/docs/thinking#signatures).
+    const modelParts: Part[] = [];
+    let finishReason: string | undefined;
+    let blockReason: string | undefined;
+    let usage: AssistantChunk['usageMetadata'];
     try {
-      message = await stream.finalMessage();
-      jsonRetries = 0;
+      const stream = await client.models.generateContentStream(buildParams(opts, contents, contextBlock, final));
+      for await (const chunk of stream) {
+        if (signal.aborted) return;
+        if (chunk.promptFeedback?.blockReason) blockReason = String(chunk.promptFeedback.blockReason);
+        if (chunk.usageMetadata) usage = chunk.usageMetadata;
+        const candidate = chunk.candidates?.[0];
+        if (!candidate) continue;
+        if (candidate.finishReason) finishReason = String(candidate.finishReason);
+        for (const part of candidate.content?.parts ?? []) {
+          const hasText = typeof part.text === 'string' && part.text.length > 0;
+          // Pusta część bez sygnatury i bez wywołania nic nie wnosi; z sygnaturą — musi wrócić do modelu.
+          if (!hasText && !part.functionCall && !part.thoughtSignature) continue;
+          modelParts.push(part);
+          if (!hasText || part.thought) continue; // streszczenia namysłu nie są odpowiedzią dla użytkownika
+          if (!roundText && emittedText) emit({ type: 'text', delta: '\n\n' });
+          roundText = true;
+          emittedText = true;
+          emit({ type: 'text', delta: part.text as string });
+        }
+      }
     } catch (err) {
       if (signal.aborted) return;
-      if (err instanceof Anthropic.BadRequestError && opts.fallbacks.enabled && !roundText) {
-        // Nagłówek beta fallbacku bywa niedostępny dla organizacji (400) — wyłączamy go i ponawiamy rundę.
-        opts.fallbacks.enabled = false;
-        opts.log?.('assistant: fallback wyłączony po błędzie 400');
-        continue;
-      }
-      // Przy eager_input_streaming SDK odrzuca finalMessage(), gdy wejście narzędzia nie jest poprawnym
-      // JSON-em; tylko ten przypadek ponawiamy — błędy API idą dalej.
-      if (err instanceof Anthropic.APIError || jsonRetries++ >= MAX_JSON_RETRIES) throw err;
-      continue;
+      throw err;
     }
+    if (signal.aborted) return;
     opts.log?.('assistant: runda', {
-      stop: message.stop_reason,
-      in: message.usage?.input_tokens,
-      cacheRead: message.usage?.cache_read_input_tokens,
-      cacheWrite: message.usage?.cache_creation_input_tokens,
-      out: message.usage?.output_tokens,
+      finish: finishReason,
+      in: usage?.promptTokenCount,
+      cached: usage?.cachedContentTokenCount,
+      out: usage?.candidatesTokenCount,
+      thoughts: usage?.thoughtsTokenCount,
     });
 
-    // Odmowa może uciąć tool_use w połowie — narzędzi z takiej tury nie wolno wykonywać.
-    if (message.stop_reason === 'refusal') {
-      emit({ type: 'error', message: 'Nie mogę pomóc w tej prośbie. Zapytaj o trasę, cień, pogodę albo wodę po drodze w Krakowie.' });
+    // Blokada promptu albo odpowiedzi przez filtry bezpieczeństwa: kończymy komunikatem, bez narzędzi.
+    if (blockReason || (finishReason && BLOCKED_FINISH.has(finishReason))) {
+      emit({ type: 'error', message: REFUSAL_MESSAGE });
       return;
     }
-    const toolUses = message.content.filter((block): block is Anthropic.Beta.BetaToolUseBlock => block.type === 'tool_use');
-    if (toolUses.length === 0) {
-      if (message.stop_reason === 'max_tokens' && emittedText) {
+    if (finishReason && MALFORMED_FINISH.has(finishReason)) {
+      if (!roundText && malformedRetries++ < MAX_MALFORMED_RETRIES) continue;
+      if (final) {
+        closingNote();
+        return;
+      }
+      emit({ type: 'error', message: 'Asystent nie zdołał poprawnie użyć narzędzi aplikacji. Spróbuj zadać pytanie inaczej.' });
+      return;
+    }
+    malformedRetries = 0;
+
+    const calls = modelParts.flatMap((part) => (part.functionCall?.name ? [part.functionCall] : []));
+    if (calls.length === 0) {
+      if (finishReason === 'MAX_TOKENS' && emittedText) {
         emit({ type: 'text', delta: '\n\n_(Odpowiedź została skrócona.)_' });
+      } else if (!emittedText && !planShown) {
+        // Pusta odpowiedź (brak kandydatów albo sam namysł ucięty limitem tokenów).
+        emit({ type: 'error', message: 'Usługa AI nie zwróciła odpowiedzi. Spróbuj ponownie albo zadaj pytanie inaczej.' });
+        return;
       }
       closingNote();
       return;
     }
-    // Wejście narzędzia ucięte limitem tokenów zwykle parsuje się jako poprawny, ale niepełny obiekt.
-    if (message.stop_reason === 'max_tokens') {
+    // Argumenty wywołania ucięte limitem tokenów mogą być niepełne — nie wykonujemy takiej tury.
+    if (finishReason === 'MAX_TOKENS') {
       emit({ type: 'error', message: 'Asystent nie zmieścił się w limicie odpowiedzi. Spróbuj zadać prostsze pytanie.' });
       return;
     }
@@ -421,41 +456,40 @@ export async function runAssistant(opts: RunAssistantOptions): Promise<void> {
       return;
     }
 
-    messages.push({ role: 'assistant', content: message.content });
+    contents.push({ role: 'model', parts: modelParts });
+    // Wyniki wracają w JEDNEJ turze użytkownika, w kolejności wywołań; id (gdy model je nadał) łączy wynik z wywołaniem.
     const results = await Promise.all(
-      toolUses.map(async (toolUse, index): Promise<Anthropic.Beta.BetaToolResultBlockParam> => {
+      calls.map(async (call, index): Promise<Part> => {
+        const name = call.name as string;
+        const ident = call.id ? { id: call.id } : {};
         if (index >= MAX_TOOLS_PER_ROUND) {
           return {
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: `Za dużo wywołań w jednym kroku (limit ${MAX_TOOLS_PER_ROUND}). Powtórz to wywołanie w następnym kroku.`,
-            is_error: true,
+            functionResponse: {
+              ...ident,
+              name,
+              response: { error: `Za dużo wywołań w jednym kroku (limit ${MAX_TOOLS_PER_ROUND}). Powtórz to wywołanie w następnym kroku.` },
+            },
           };
         }
-        emit({ type: 'tool', name: toolUse.name, label: toolLabel(toolUse.name, toolUse.input) });
-        const outcome = await executeTool(toolUse.name, toolUse.input, {
+        const input = call.args ?? {};
+        emit({ type: 'tool', name, label: toolLabel(name, input) });
+        const outcome = await executeTool(name, input, {
           now: opts.now,
           emit,
           context: opts.context,
           onInternalError: (tool, error) => opts.log?.('assistant: błąd narzędzia', { tool, error: error instanceof Error ? error.name : typeof error }),
         });
-        return {
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: outcome.content,
-          ...(outcome.isError ? { is_error: true } : {}),
-        };
+        return { functionResponse: { ...ident, name, response: toolResponseBody(outcome) } };
       }),
     );
     toolRounds++;
-    const content: Anthropic.Beta.BetaContentBlockParam[] = [...results];
+    const parts: Part[] = [...results];
     if (toolRounds >= MAX_TOOL_ROUNDS) {
-      content.push({
-        type: 'text',
+      parts.push({
         text: 'Limit kroków narzędziowych został wyczerpany. Odpowiedz teraz użytkownikowi na podstawie zebranych danych, bez kolejnych wywołań.',
       });
     }
-    messages.push({ role: 'user', content });
+    contents.push({ role: 'user', parts });
   }
 }
 
@@ -464,7 +498,7 @@ export async function runAssistant(opts: RunAssistantOptions): Promise<void> {
 export interface AssistantDeps {
   /** Zmienne środowiskowe (domyślnie process.env). */
   env?: Env;
-  /** Fabryka klienta (domyślnie `new Anthropic()` — dane dostępowe z otoczenia). W testach: atrapa. */
+  /** Fabryka klienta (domyślnie GoogleGenAI z kluczem z otoczenia). W testach: atrapa. */
   createClient?: () => AssistantClient;
   now?: () => Date;
   rateLimit?: { max: number; windowMs: number };
@@ -480,9 +514,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: AssistantDep
   const env = deps.env ?? process.env;
   const limits = deps.rateLimit ?? RATE_LIMIT;
   const limiter = createRateLimiter(limits.max, limits.windowMs);
-  const fallbacks = { enabled: resolveConfig(env).fallbacks };
   let client: AssistantClient | null = null;
-  const getClient = (): AssistantClient => (client ??= deps.createClient ? deps.createClient() : new Anthropic());
+  const getClient = (): AssistantClient => (client ??= deps.createClient ? deps.createClient() : new GoogleGenAI({ apiKey: apiKeyFrom(env) }));
 
   app.get('/api/assistant/status', async (): Promise<AssistantStatus> => {
     const config = resolveConfig(env);
@@ -556,7 +589,6 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: AssistantDep
         await runAssistant({
           client: getClient(),
           config,
-          fallbacks,
           messages: parsed.messages,
           context: parsed.context,
           now: deps.now ? deps.now() : new Date(),
@@ -568,7 +600,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: AssistantDep
         if (!controller.signal.aborted) {
           const message = describeAssistantError(err);
           // Do logu trafia tylko rodzaj błędu — bez treści, nagłówków i stosu.
-          const status = err instanceof Anthropic.APIError ? err.status : undefined;
+          const status = httpStatusOf(err);
           request.log.warn({ name: err instanceof Error ? err.name : typeof err, status }, 'assistant: błąd zapytania do modelu');
           if (message) send({ type: 'error', message });
         }

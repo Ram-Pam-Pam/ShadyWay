@@ -50,8 +50,6 @@ const SEGMENT_KIND_LABELS: Record<SegmentKind, string> = {
   covered: 'przejście zadaszone',
 };
 
-const COMPASS_POINTS = ['pn.', 'pn.-wsch.', 'wsch.', 'pd.-wsch.', 'pd.', 'pd.-zach.', 'zach.', 'pn.-zach.'];
-
 const oneDecimal = new Intl.NumberFormat('pl-PL', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const integer = new Intl.NumberFormat('pl-PL', { maximumFractionDigits: 0 });
 const coordinate = new Intl.NumberFormat('pl-PL', { minimumFractionDigits: 5, maximumFractionDigits: 5 });
@@ -88,12 +86,6 @@ export function formatTemperature(celsius: number): string {
 
 export function formatCoordinates(point: LatLon): string {
   return `${coordinate.format(point.lat)}; ${coordinate.format(point.lon)}`;
-}
-
-/** Azymut w stopniach → skrót kierunku świata po polsku. */
-export function compassPoint(azimuthDeg: number): string {
-  const normalized = ((azimuthDeg % 360) + 360) % 360;
-  return COMPASS_POINTS[Math.round(normalized / 45) % 8];
 }
 
 export function cssGradient(stops: readonly string[]): string {

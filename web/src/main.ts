@@ -18,9 +18,7 @@ import {
   reverseGeocode,
 } from './api.ts';
 import type { App, FitMode } from './app.ts';
-import { coolSpotMarkers } from './coolSpots.ts';
 import { installAssistant } from './features/assistant.ts';
-import { createCoolSpotLayer } from './features/coolSpotLayer.ts';
 import { DepartureFeature } from './features/departure.ts';
 import { installLocateButton } from './features/locate.ts';
 import { installNavigation } from './features/navigation.ts';
@@ -29,7 +27,7 @@ import { createShadowLayer } from './features/shadows.ts';
 import { installUrlSync } from './features/urlSync.ts';
 import { formatCoordinates } from './format.ts';
 import { parseHash } from './hash.ts';
-import { comfortTexts, coolSpotTitle, routeSummary } from './labels.ts';
+import { comfortTexts, routeSummary } from './labels.ts';
 import { MapView } from './map.ts';
 import { cachedRouteFor, loadLastRoute, saveLastRoute } from './offlineRoute.ts';
 import { planToPatch } from './plan.ts';
@@ -44,7 +42,6 @@ import {
   type Place,
 } from './store.ts';
 import { instantToWallTime, nowWallTime, wallTimeToIso } from './time.ts';
-import { createCoolSpotElement, describeCoolSpot } from './ui/coolSpotPopup.ts';
 import { LayerPanel } from './ui/layerPanel.ts';
 import { PlaceField } from './ui/placeField.ts';
 import { PreferencesControl } from './ui/preferencesControl.ts';
@@ -59,6 +56,8 @@ const ROUTE_DEBOUNCE_MS = 400;
 const SLOW_REQUEST_MS = 2000;
 const AMBIENT_DEBOUNCE_MS = 250;
 const NOW_CHECK_INTERVAL_MS = 60_000;
+/** Tryb cień/słońce zawsze rozstrzyga serwer (cień w upale, słońce w chłodne dni). */
+const REQUEST_COMFORT = 'auto';
 
 function nextPickTarget(from: Place | null, to: Place | null): EndpointKey | null {
   if (!from) return 'from';
@@ -81,10 +80,7 @@ function initialState(): AppState {
     followNow: parsed.time === null,
     shadePreference: parsed.shadePreference ?? 0.5,
     mobility: parsed.mobility ?? (sharedRoute ? 'default' : prefs.mobility),
-    comfort: parsed.comfort ?? (sharedRoute ? 'auto' : prefs.comfort),
-    viaCoolSpot: parsed.viaCoolSpot ?? (sharedRoute ? false : prefs.viaCoolSpot),
     userLocation: null,
-    coolSpotLayer: { spots: [], note: null },
     routeStatus: 'idle',
     routeSlow: false,
     routeError: null,
@@ -93,7 +89,7 @@ function initialState(): AppState {
     selectedProfile: 'balanced',
     sun: null,
     weather: null,
-    layers: { shadows: true, heat: false, buildings3d: false, coolSpots: false },
+    layers: { shadows: true, heat: false, buildings3d: false },
     heat: { state: 'loading' },
     shadowHint: null,
     formError: null,
@@ -118,24 +114,12 @@ const map = new MapView({
   },
   onMarkerDrag: (which, point) => placePoint(which, point, 'if-needed'),
   onSelectRoute: (profile) => selectProfile(profile),
-  onViewChange: () => {
-    refreshShadows();
-    refreshCoolSpots();
-  },
+  onViewChange: () => refreshShadows(),
   describeSegment,
-  createCoolSpotElement,
-  describeCoolSpot: (spot, role) =>
-    describeCoolSpot(spot, role, {
-      onUseAs: (which, target) => {
-        map.closeSpotPopup();
-        setEndpoint(which, { lat: target.lat, lon: target.lon, label: coolSpotTitle(target) }, 'if-needed');
-      },
-    }),
   getPadding: () => sheet.mapPadding(),
 });
 
 const refreshShadows = createShadowLayer(store, map);
-const refreshCoolSpots = createCoolSpotLayer(store, map);
 
 // ───────────────────────── panel ─────────────────────────
 
@@ -166,9 +150,7 @@ const timeControl = new TimeControl({
 
 const preferences = new PreferencesControl({
   onMobility: (mobility) => store.set({ mobility }),
-  onComfort: (comfort) => store.set({ comfort }),
   onPreference: (shadePreference) => store.set({ shadePreference }),
-  onViaCoolSpot: (viaCoolSpot) => store.set({ viaCoolSpot }),
 });
 
 const routeList = new RouteList({
@@ -182,7 +164,7 @@ const layerPanel = new LayerPanel({
 
 const departure = new DepartureFeature({
   getRequest: () => {
-    const { from, to, date, minutes, shadePreference, mobility, comfort } = store.get();
+    const { from, to, date, minutes, shadePreference, mobility } = store.get();
     if (!from || !to) return null;
     return {
       from: { lat: from.lat, lon: from.lon },
@@ -190,7 +172,7 @@ const departure = new DepartureFeature({
       start: wallTimeToIso(date, minutes),
       shadePreference,
       mobility,
-      comfort,
+      comfort: REQUEST_COMFORT,
     };
   },
   getComfort: () => effectiveComfort(store.get()),
@@ -198,7 +180,7 @@ const departure = new DepartureFeature({
   onPickTime: (iso) => setDepartureTime(iso),
 });
 
-const pickHint = byId<HTMLElement>('pick-hint');
+const departureBox = byId<HTMLElement>('departure');
 const formError = byId<HTMLElement>('form-error');
 const mapHint = byId<HTMLElement>('map-hint');
 const mapProgress = byId<HTMLElement>('map-progress');
@@ -299,8 +281,7 @@ async function runRoute(): Promise<void> {
         time: wallTimeToIso(state.date, state.minutes),
         shadePreference: state.shadePreference,
         mobility: state.mobility,
-        comfort: state.comfort,
-        viaCoolSpot: state.viaCoolSpot,
+        comfort: REQUEST_COMFORT,
       },
       controller.signal,
     );
@@ -329,7 +310,6 @@ async function runRoute(): Promise<void> {
     fitMode = null;
     // Wyznaczenie trasy mogło pobrać dane mapy dla okolicy, w której warstwy były dotąd puste.
     refreshShadows();
-    refreshCoolSpots();
   } catch (error) {
     if (isAbortError(error) || controller.signal.aborted) return;
     clearTimeout(slowTimer);
@@ -407,11 +387,11 @@ fetchHeatMeta()
       heat:
         meta.available && meta.bounds
           ? { state: 'ready', meta }
-          : { state: 'unavailable', reason: 'Niedostępna — serwer nie ma danych satelitarnych LST' },
+          : { state: 'unavailable', reason: 'Brak danych satelitarnych na serwerze' },
     });
   })
   .catch(() => {
-    store.set({ heat: { state: 'unavailable', reason: 'Niedostępna — nie udało się pobrać danych LST' } });
+    store.set({ heat: { state: 'unavailable', reason: 'Nie udało się pobrać danych mapy ciepła' } });
   });
 
 map.whenReady(({ hasBuildings }) => {
@@ -433,18 +413,10 @@ const urlSync = installUrlSync((parsed) => {
     followNow: parsed.time === null,
     shadePreference: parsed.shadePreference ?? current.shadePreference,
     mobility: parsed.mobility ?? 'default',
-    comfort: parsed.comfort ?? 'auto',
-    viaCoolSpot: parsed.viaCoolSpot ?? false,
   });
 });
 
 // ───────────────────────── widok ─────────────────────────
-
-function pickHintText(state: AppState): string {
-  if (state.pickTarget === 'from') return 'Kliknij mapę, aby wskazać start (A).';
-  if (state.pickTarget === 'to') return 'Kliknij mapę, aby wskazać cel (B).';
-  return 'Przeciągnij znacznik A lub B na mapie, aby zmienić trasę.';
-}
 
 function sheetSummary(state: AppState): string {
   if (state.routeStatus === 'loading') return 'Wyznaczam trasę…';
@@ -477,15 +449,15 @@ function apply(state: AppState, previous: AppState | null): void {
     fields.from.setActive(state.pickTarget === 'from');
     fields.to.setActive(state.pickTarget === 'to');
     map.setPickCursor(state.pickTarget !== null);
-    pickHint.textContent = pickHintText(state);
   }
   if (changed('formError')) {
     formError.hidden = state.formError === null;
     formError.textContent = state.formError ?? '';
   }
-  if (changed('shadePreference', 'mobility', 'comfort', 'viaCoolSpot', 'response', 'weather')) preferences.render(state);
+  if (changed('shadePreference', 'mobility', 'response')) preferences.render(state);
   if (changed('date', 'minutes', 'followNow', 'sun', 'weather')) timeControl.render(state);
-  if (changed('from', 'to', 'routeStatus', 'routeSlow', 'routeError', 'response', 'selectedProfile', 'comfort')) {
+  if (changed('from', 'to')) departureBox.hidden = !state.from || !state.to;
+  if (changed('from', 'to', 'routeStatus', 'routeSlow', 'routeError', 'response', 'selectedProfile')) {
     routeList.render(state);
     sheet.setSummary(sheetSummary(state));
   }
@@ -494,10 +466,7 @@ function apply(state: AppState, previous: AppState | null): void {
     map.highlightPoint(null);
     mapProgress.hidden = state.routeStatus !== 'loading';
   }
-  if (changed('response', 'selectedProfile', 'coolSpotLayer')) {
-    map.setCoolSpots(coolSpotMarkers(selectedRoute(state), state.coolSpotLayer.spots));
-  }
-  if (changed('layers', 'heat', 'coolSpotLayer')) {
+  if (changed('layers', 'heat')) {
     layerPanel.render(state);
     const heatMeta = state.heat.state === 'ready' ? state.heat.meta : null;
     map.setHeat(heatMeta, heatMeta !== null && state.layers.heat);
@@ -509,10 +478,10 @@ function apply(state: AppState, previous: AppState | null): void {
     mapHint.hidden = state.shadowHint === null;
     mapHint.textContent = state.shadowHint ?? '';
   }
-  const routeOptionsChanged = changed('mobility', 'comfort', 'viaCoolSpot');
+  const routeOptionsChanged = changed('mobility');
   if (changed('from', 'to', 'date', 'minutes', 'followNow', 'shadePreference') || routeOptionsChanged) urlSync.write(state);
   if (previous !== null && routeOptionsChanged) {
-    savePrefs({ mobility: state.mobility, comfort: state.comfort, viaCoolSpot: state.viaCoolSpot });
+    savePrefs({ mobility: state.mobility });
   }
 
   // Zapytania zależne od danych wejściowych (zmiana samej etykiety miejsca niczego nie przelicza).
@@ -524,10 +493,9 @@ function apply(state: AppState, previous: AppState | null): void {
   else if (timeChanged || changed('shadePreference')) requestRoute(ROUTE_DEBOUNCE_MS, false);
   if (timeChanged) refreshAmbient();
   if (timeChanged || previous === null || state.layers.shadows !== previous.layers.shadows) refreshShadows();
-  if (timeChanged || previous === null || state.layers.coolSpots !== previous.layers.coolSpots) refreshCoolSpots();
 
   if (previous !== null) {
-    if (endpointsMoved || changed('shadePreference', 'mobility', 'comfort')) departure.invalidate();
+    if (endpointsMoved || changed('shadePreference', 'mobility')) departure.invalidate();
     else if (timeChanged || comfortChanged) departure.refresh();
   }
 }

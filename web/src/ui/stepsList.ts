@@ -1,17 +1,10 @@
-// Zwijana lista „Wskazówki” dla wybranej trasy: manewr, instrukcja, dystans i nasłonecznienie kroku.
+// Lista wskazówek dla wybranej trasy: manewr, instrukcja, dystans i nasłonecznienie kroku.
 // Najechanie lub fokus podświetla miejsce manewru na mapie; kliknięcie przypina podświetlenie i przesuwa mapę.
 
 import type { RouteStep } from '../../../shared/types.ts';
 import { formatDistance, formatPercent } from '../format.ts';
-import { plural } from '../labels.ts';
 import { el } from '../util.ts';
 import { maneuverIcon } from './icons.ts';
-
-export interface StepsListOptions {
-  /** `pan` = przesuń mapę do kroku (kliknięcie); null = zdejmij podświetlenie. */
-  onHighlight(step: RouteStep | null, pan: boolean): void;
-  onToggle(open: boolean): void;
-}
 
 function shadeHint(sunFraction: number): { className: string; text: string } {
   const sun = Math.max(0, Math.min(1, sunFraction));
@@ -20,7 +13,11 @@ function shadeHint(sunFraction: number): { className: string; text: string } {
   return { className: 'step__dot--mixed', text: `${formatPercent(1 - sun)} w cieniu` };
 }
 
-export function createStepsList(steps: readonly RouteStep[], open: boolean, options: StepsListOptions): HTMLElement {
+/** @param onHighlight `pan` = przesuń mapę do kroku (kliknięcie); null = zdejmij podświetlenie. */
+export function createStepsList(
+  steps: readonly RouteStep[],
+  onHighlight: (step: RouteStep | null, pan: boolean) => void,
+): HTMLOListElement {
   let pinned: HTMLButtonElement | null = null;
 
   const items = steps.map((step) => {
@@ -43,12 +40,12 @@ export function createStepsList(steps: readonly RouteStep[], open: boolean, opti
     );
     button.type = 'button';
 
-    const show = (): void => options.onHighlight(step, false);
+    const show = (): void => onHighlight(step, false);
     const restore = (): void => {
       if (pinned === button) return;
       // Po zjechaniu z kroku wraca podświetlenie przypiętego kroku (albo żadne).
       if (pinned) pinned.dispatchEvent(new CustomEvent('cien:restore'));
-      else options.onHighlight(null, false);
+      else onHighlight(null, false);
     };
     button.addEventListener('mouseenter', show);
     button.addEventListener('focus', show);
@@ -59,32 +56,18 @@ export function createStepsList(steps: readonly RouteStep[], open: boolean, opti
       if (pinned === button) {
         pinned = null;
         button.removeAttribute('aria-current');
-        options.onHighlight(null, false);
+        onHighlight(null, false);
         return;
       }
       pinned?.removeAttribute('aria-current');
       pinned = button;
       button.setAttribute('aria-current', 'step');
-      options.onHighlight(step, true);
+      onHighlight(step, true);
     });
     return el('li', '', button);
   });
 
-  const list = el('ol', 'steps__list', ...items);
-  const summary = el(
-    'summary',
-    'steps__summary',
-    el('span', '', 'Wskazówki'),
-    el('span', 'steps__count', `${steps.length} ${plural(steps.length, 'krok', 'kroki', 'kroków')}`),
-  );
-  const details = el('details', 'steps', summary, list);
-  details.open = open;
-  details.addEventListener('toggle', () => {
-    options.onToggle(details.open);
-    if (!details.open) {
-      pinned = null;
-      options.onHighlight(null, false);
-    }
-  });
-  return details;
+  const list = el('ol', 'steps', ...items);
+  list.setAttribute('aria-label', 'Wskazówki');
+  return list;
 }

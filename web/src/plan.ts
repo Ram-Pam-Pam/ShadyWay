@@ -1,7 +1,8 @@
 // Zamiana planu asystenta AI (AssistantPlan) na zmianę stanu aplikacji. Pola nieobecne w planie = bez zmian.
+// Pola planu bez odpowiednika w interfejsie (tryb komfortu, punkt chłodu) są pomijane.
 
 import { KRAKOW_BBOX, type AssistantPlan, type LatLon } from '../../shared/types.ts';
-import { parseComfort, parseMobility } from './hash.ts';
+import { parseMobility } from './hash.ts';
 import type { AppState, Place } from './store.ts';
 import { instantToWallTime } from './time.ts';
 
@@ -16,8 +17,6 @@ export type PlanPatch = Partial<
     | 'followNow'
     | 'shadePreference'
     | 'mobility'
-    | 'comfort'
-    | 'viaCoolSpot'
     | 'selectedProfile'
     | 'formError'
   >
@@ -66,9 +65,6 @@ export function planToPatch(plan: AssistantPlan, current: Pick<AppState, 'from' 
   }
   const mobility = parseMobility(plan.mobility);
   if (mobility) patch.mobility = mobility;
-  const comfort = parseComfort(plan.comfort);
-  if (comfort) patch.comfort = comfort;
-  if (typeof plan.viaCoolSpot === 'boolean') patch.viaCoolSpot = plan.viaCoolSpot;
   if (plan.selectProfile === 'shortest' || plan.selectProfile === 'balanced' || plan.selectProfile === 'shadiest') {
     patch.selectedProfile = plan.selectProfile;
   }

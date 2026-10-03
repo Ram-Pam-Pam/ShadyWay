@@ -2,7 +2,7 @@
 // Zapytania POST nie przechodzą przez pamięć podręczną service workera, więc trasę zapisuje sama strona.
 
 import type { RouteProfile, RouteResponse } from '../../shared/types.ts';
-import { parseComfort, parseMobility } from './hash.ts';
+import { parseMobility } from './hash.ts';
 import { inServiceArea } from './plan.ts';
 import type { AppState, Place } from './store.ts';
 import { isValidDateString } from './time.ts';
@@ -20,15 +20,13 @@ export interface SavedRoute {
   minutes: number;
   shadePreference: number;
   mobility: AppState['mobility'];
-  comfort: AppState['comfort'];
-  viaCoolSpot: boolean;
   selectedProfile: RouteProfile;
   response: RouteResponse;
 }
 
 type SaveableState = Pick<
   AppState,
-  'from' | 'to' | 'date' | 'minutes' | 'shadePreference' | 'mobility' | 'comfort' | 'viaCoolSpot' | 'selectedProfile' | 'response'
+  'from' | 'to' | 'date' | 'minutes' | 'shadePreference' | 'mobility' | 'selectedProfile' | 'response'
 >;
 
 export function toSavedRoute(state: SaveableState, now: Date = new Date()): SavedRoute | null {
@@ -41,8 +39,6 @@ export function toSavedRoute(state: SaveableState, now: Date = new Date()): Save
     minutes: state.minutes,
     shadePreference: state.shadePreference,
     mobility: state.mobility,
-    comfort: state.comfort,
-    viaCoolSpot: state.viaCoolSpot,
     selectedProfile: state.selectedProfile,
     response: state.response,
   };
@@ -93,8 +89,6 @@ export function parseSavedRoute(raw: string | null | undefined): SavedRoute | nu
     minutes,
     shadePreference: Number.isFinite(preference) ? Math.min(1, Math.max(0, preference)) : 0.5,
     mobility: parseMobility(record.mobility) ?? 'default',
-    comfort: parseComfort(record.comfort) ?? 'auto',
-    viaCoolSpot: record.viaCoolSpot === true,
     selectedProfile: profile === 'shortest' || profile === 'shadiest' ? profile : 'balanced',
     response: record.response,
   };

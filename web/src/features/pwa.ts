@@ -80,8 +80,6 @@ function installOfflineBanner(app: App): void {
       followNow: false,
       shadePreference: saved.shadePreference,
       mobility: saved.mobility,
-      comfort: saved.comfort,
-      viaCoolSpot: saved.viaCoolSpot,
       selectedProfile: saved.selectedProfile,
     });
   };

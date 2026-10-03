@@ -6,10 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "tsx watch --env-file-if-exists=.env server/index.ts",
     "dev:web": "vite",
     "build": "vite build",
-    "start": "tsx server/index.ts",
+    "start": "tsx --env-file-if-exists=.env server/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "prefetch": "tsx server/scripts/prefetch.ts",
@@ -17,8 +17,8 @@
     "fetch-lst": "tsx server/scripts/fetch-lst.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
     "@fastify/static": "^10.1.5",
+    "@google/genai": "^2.27.0",
     "fastify": "^5.12.5",
     "geotiff": "^3.0.5",
     "maplibre-gl": "^6.11.2",

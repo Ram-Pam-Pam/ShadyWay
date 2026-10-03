@@ -1,8 +1,6 @@
 // Mały magazyn stanu aplikacji: jedno źródło prawdy + powiadamianie subskrybentów o zmianach.
 
 import type {
-  ComfortMode,
-  CoolSpot,
   HeatMeta,
   LatLon,
   MobilityProfile,
@@ -30,15 +28,6 @@ export interface LayerToggles {
   shadows: boolean;
   heat: boolean;
   buildings3d: boolean;
-  /** Punkty chłodu (woda, ławki, parki…) w widoku mapy. */
-  coolSpots: boolean;
-}
-
-/** Wynik warstwy „Punkty chłodu” dla bieżącego widoku mapy. */
-export interface CoolSpotLayerState {
-  spots: CoolSpot[];
-  /** Komunikat pod przełącznikiem warstwy (np. prośba o przybliżenie) albo null. */
-  note: string | null;
 }
 
 export interface AppState {
@@ -54,12 +43,8 @@ export interface AppState {
   followNow: boolean;
   shadePreference: number;
   mobility: MobilityProfile;
-  /** Tryb wybrany przez użytkownika; faktycznie zastosowany zwraca serwer (patrz effectiveComfort). */
-  comfort: ComfortMode;
-  viaCoolSpot: boolean;
   /** Ostatnia pozycja z GPS (dla asystenta i nawigacji); null, gdy nieznana. */
   userLocation: LatLon | null;
-  coolSpotLayer: CoolSpotLayerState;
   routeStatus: RouteStatus;
   /** Zapytanie trwa dłużej niż chwilę — pewnie pobierane są dane OSM. */
   routeSlow: boolean;
@@ -138,11 +123,9 @@ export function selectedRoute(state: Pick<AppState, 'response' | 'selectedProfil
 }
 
 /**
- * Tryb, w którym interfejs ma „mówić”: rozstrzygnięty przez serwer dla bieżącej odpowiedzi,
- * a zanim odpowiedź przyjdzie — wybór użytkownika ('auto' traktujemy do tego czasu jak cień).
+ * Tryb, w którym interfejs ma „mówić”. Aplikacja zawsze prosi o tryb 'auto', a serwer rozstrzyga
+ * (cień w upale, słońce w chłodne dni); zanim przyjdzie odpowiedź, przyjmujemy cień.
  */
-export function effectiveComfort(state: Pick<AppState, 'response' | 'comfort'>): 'shade' | 'sun' {
-  const applied = state.response?.comfort;
-  if (applied === 'sun' || applied === 'shade') return applied;
-  return state.comfort === 'sun' ? 'sun' : 'shade';
+export function effectiveComfort(state: Pick<AppState, 'response'>): 'shade' | 'sun' {
+  return state.response?.comfort === 'sun' ? 'sun' : 'shade';
 }

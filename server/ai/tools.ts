@@ -1,12 +1,10 @@
 // Narzędzia „Asystenta Cienia”: definicje dla modelu, walidacja wejścia i wykonanie po stronie serwera.
 //
 // Zasady:
-//  - wejście od modelu jest niezaufane — każde pole jest sprawdzane przed użyciem (definicje mają
-//    eager_input_streaming, więc API nie waliduje schematu za nas),
+//  - wejście od modelu jest niezaufane — każde pole jest sprawdzane przed użyciem (schemat w deklaracji
+//    funkcji jest dla modelu wskazówką, nie gwarancją),
 //  - wyniki są ZWARTE: model nigdy nie dostaje geometrii tras, tylko podsumowania liczbowe,
-//  - błędy wracają do modelu jako tool_result z is_error (komunikat po polsku, bez stosu wywołań).
-
-import type Anthropic from '@anthropic-ai/sdk';
+//  - błędy wracają do modelu jako wynik funkcji z polem „error” (komunikat po polsku, bez stosu wywołań).
 
 import { KRAKOW_BBOX } from '../../shared/types.ts';
 import type {
@@ -66,18 +64,28 @@ const COOL_KINDS: readonly CoolSpotKind[] = ['drinking_water', 'fountain', 'wate
 const DEFAULT_COOL_KINDS: CoolSpotKind[] = ['drinking_water', 'fountain', 'water_mist', 'shelter'];
 
 /**
- * Definicje narzędzi w stałej kolejności (kolejność i treść są częścią cache'owanego prefiksu promptu —
- * nie buduj tej listy dynamicznie).
+ * Definicja narzędzia niezależna od dostawcy modelu. `parameters` to zwykły JSON Schema ograniczony do słów
+ * kluczowych, które przyjmują deklaracje funkcji Gemini: type, properties, required, description, enum, items
+ * (https://ai.google.dev/gemini-api/docs/function-calling). Nie dodawaj tu innych słów kluczowych.
  */
-export const TOOL_DEFINITIONS: Anthropic.Beta.BetaTool[] = [
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+}
+
+/**
+ * Definicje narzędzi w stałej kolejności (kolejność i treść są częścią stałego prefiksu zapytania, który
+ * dostawca modelu może cache'ować — nie buduj tej listy dynamicznie).
+ */
+export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'geocode_place',
     description:
       'Wyszukuje miejsce lub adres w Krakowie i zwraca kandydatów ze współrzędnymi. Wywołaj dla każdego miejsca, ' +
       'które użytkownik nazwał słownie (np. „AGH”, „Wawel”, „dworzec”, „ul. Karmelicka 20”), zanim policzysz trasę. ' +
       'Nie używaj dla punktów, które masz już ze współrzędnymi w kontekście aplikacji.',
-    eager_input_streaming: true,
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: { query: { type: 'string', description: 'Nazwa miejsca lub adres, bez dopisku „Kraków”' } },
       required: ['query'],
@@ -90,8 +98,7 @@ export const TOOL_DEFINITIONS: Anthropic.Beta.BetaTool[] = [
       '(shortest / balanced / shadiest): długość, czas, udział cienia, metry w słońcu, temperaturę odczuwalną, ' +
       'światła, schody, punkty chłodu, pierwsze kroki, główne odcinki i ostrzeżenia. Wywołaj zawsze, gdy użytkownik ' +
       'chce dojść z miejsca do miejsca albo pyta, dlaczego trasa prowadzi tak, a nie inaczej.',
-    eager_input_streaming: true,
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         from: POINT_SCHEMA,
@@ -113,8 +120,7 @@ export const TOOL_DEFINITIONS: Anthropic.Beta.BetaTool[] = [
     description:
       'Porównuje godziny wyjścia w podanym oknie czasu dla trasy z A do B i wskazuje najlepszą (cień, pogoda, długość). ' +
       'Wywołaj, gdy użytkownik pyta „kiedy najlepiej wyjść”, ma elastyczną porę albo planuje wyjście w upale.',
-    eager_input_streaming: true,
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         from: POINT_SCHEMA,
@@ -135,8 +141,7 @@ export const TOOL_DEFINITIONS: Anthropic.Beta.BetaTool[] = [
       'Szuka punktów chłodu: woda pitna, fontanny, zamgławiacze, ławki, parki, zadaszenia — w pobliżu punktu („near”) ' +
       'albo w prostokącie („bbox”). Wywołaj, gdy użytkownik pyta o wodę, miejsce na odpoczynek lub ochłodę. ' +
       'Zna tylko okolice, dla których aplikacja ma już pobrane dane mapy (np. po wyznaczeniu trasy).',
-    eager_input_streaming: true,
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         near: POINT_SCHEMA,
@@ -167,8 +172,7 @@ export const TOOL_DEFINITIONS: Anthropic.Beta.BetaTool[] = [
       'Zwraca położenie słońca (wysokość, azymut, wschód i zachód) oraz pogodę w Krakowie dla podanej chwili: ' +
       'temperaturę, temperaturę odczuwalną, zachmurzenie, promieniowanie i indeks UV. Wywołaj przy pytaniach o upał, ' +
       'słońce lub pogodę, gdy nie liczysz trasy (plan_route zwraca te dane sam).',
-    eager_input_streaming: true,
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: { time: { type: 'string', description: TIME_DESCRIPTION } },
     },
@@ -179,8 +183,7 @@ export const TOOL_DEFINITIONS: Anthropic.Beta.BetaTool[] = [
       'Pokazuje ustalony plan na mapie użytkownika: ustawia start, cel, godzinę i opcje, przelicza trasę i zaznacza wariant. ' +
       'Wywołaj za każdym razem, gdy zdecydujesz się na konkretną trasę (po plan_route), z tymi samymi parametrami. ' +
       'Pola pominięte pozostają w aplikacji bez zmian.',
-    eager_input_streaming: true,
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         from: { ...POINT_SCHEMA, required: ['lat', 'lon', 'label'] },

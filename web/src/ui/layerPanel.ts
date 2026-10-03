@@ -1,30 +1,26 @@
-// Przełączniki warstw mapy: cienie, mapa ciepła (LST) z legendą, punkty chłodu, budynki 3D.
+// Przycisk „Warstwy mapy” na mapie: wysuwane przełączniki (cienie, mapa ciepła, budynki 3D)
+// oraz mała legenda mapy ciepła, widoczna tylko przy włączonej warstwie.
 
 import { HEAT_RAMP, cssGradient, formatTemperature } from '../format.ts';
 import type { AppState, LayerToggles } from '../store.ts';
 import { byId } from '../util.ts';
 
-const HEAT_NOTE_DEFAULT = 'Satelitarna temperatura powierzchni';
-const COOL_SPOTS_NOTE_DEFAULT = 'Woda pitna, fontanny, ławki, parki i wiaty';
-
 export interface LayerPanelOptions {
   onToggle(layer: keyof LayerToggles, enabled: boolean): void;
 }
 
-type LayerViewState = Pick<AppState, 'layers' | 'heat' | 'coolSpotLayer'>;
+type LayerViewState = Pick<AppState, 'layers' | 'heat'>;
 
 export class LayerPanel {
+  private readonly root = byId<HTMLElement>('layers');
+  private readonly button = byId<HTMLButtonElement>('layers-button');
+  private readonly popover = byId<HTMLElement>('layers-popover');
   private readonly shadows = byId<HTMLInputElement>('layer-shadows');
   private readonly heat = byId<HTMLInputElement>('layer-heat');
   private readonly buildings = byId<HTMLInputElement>('layer-buildings');
-  private readonly coolSpots = byId<HTMLInputElement>('layer-coolspots');
-  private readonly coolSpotsNote = byId<HTMLElement>('layer-coolspots-note');
-  private readonly heatNote = byId<HTMLElement>('layer-heat-note');
-  private readonly buildingsNote = byId<HTMLElement>('layer-buildings-note');
   private readonly heatLegend = byId<HTMLElement>('heat-legend');
   private readonly heatMin = byId<HTMLElement>('heat-min');
   private readonly heatMax = byId<HTMLElement>('heat-max');
-  private readonly heatSource = byId<HTMLElement>('heat-source');
 
   constructor(options: LayerPanelOptions) {
     byId<HTMLElement>('heat-legend-bar').style.background = cssGradient(HEAT_RAMP);
@@ -33,38 +29,50 @@ export class LayerPanel {
     };
     bind(this.shadows, 'shadows');
     bind(this.heat, 'heat');
-    bind(this.coolSpots, 'coolSpots');
     bind(this.buildings, 'buildings3d');
+
+    this.button.addEventListener('click', () => this.setOpen(this.button.getAttribute('aria-expanded') !== 'true'));
+    this.root.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || this.popover.hidden) return;
+      this.setOpen(false);
+      this.button.focus();
+    });
+    // Kliknięcie poza przyciskiem i listą (np. w mapę) zamyka listę.
+    document.addEventListener('pointerdown', (event) => {
+      if (!this.popover.hidden && event.target instanceof Node && !this.root.contains(event.target)) this.setOpen(false);
+    });
   }
 
-  /** Podkład mapy nie ma wysokości budynków — przełącznik 3D zostaje wyłączony z wyjaśnieniem. */
+  /** Podkład mapy nie ma wysokości budynków — przełącznik 3D zostaje wyłączony. */
   disableBuildings(): void {
     this.buildings.disabled = true;
     this.buildings.checked = false;
-    this.buildingsNote.textContent = 'Podkład mapy nie zawiera wysokości budynków';
+    this.buildings.title = 'Podkład mapy nie zawiera wysokości budynków';
   }
 
   render(state: LayerViewState): void {
     this.shadows.checked = state.layers.shadows;
     this.buildings.checked = state.layers.buildings3d && !this.buildings.disabled;
-    this.coolSpots.checked = state.layers.coolSpots;
-    this.coolSpotsNote.textContent = (state.layers.coolSpots && state.coolSpotLayer.note) || COOL_SPOTS_NOTE_DEFAULT;
 
     const heat = state.heat;
-    const available = heat.state === 'ready';
-    this.heat.disabled = !available;
-    this.heat.checked = available && state.layers.heat;
-    if (heat.state === 'loading') this.heatNote.textContent = 'Sprawdzam dostępność danych…';
-    else if (heat.state === 'unavailable') this.heatNote.textContent = heat.reason;
-    else this.heatNote.textContent = HEAT_NOTE_DEFAULT;
+    const meta = heat.state === 'ready' ? heat.meta : null;
+    this.heat.disabled = meta === null;
+    this.heat.checked = meta !== null && state.layers.heat;
+    this.heat.title = heat.state === 'unavailable' ? heat.reason : '';
 
-    const meta = available ? heat.meta : null;
     const showLegend = this.heat.checked && meta !== null;
     this.heatLegend.hidden = !showLegend;
     if (showLegend && meta) {
-      this.heatMin.textContent = meta.minC !== undefined ? formatTemperature(meta.minC) : 'chłodniej';
-      this.heatMax.textContent = meta.maxC !== undefined ? formatTemperature(meta.maxC) : 'cieplej';
-      this.heatSource.textContent = meta.source ? `Źródło: ${meta.source}` : '';
+      const min = meta.minC !== undefined ? formatTemperature(meta.minC) : 'chłodniej';
+      const max = meta.maxC !== undefined ? formatTemperature(meta.maxC) : 'cieplej';
+      this.heatMin.textContent = min;
+      this.heatMax.textContent = max;
+      this.heatLegend.setAttribute('aria-label', `Temperatura powierzchni: od ${min} do ${max}`);
     }
+  }
+
+  private setOpen(open: boolean): void {
+    this.popover.hidden = !open;
+    this.button.setAttribute('aria-expanded', String(open));
   }
 }

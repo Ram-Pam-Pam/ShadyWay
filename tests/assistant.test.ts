@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { ApiError } from '@google/genai';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -38,10 +38,12 @@ import {
   DEFAULT_MODEL,
   describeAssistantError,
   LIMITS,
+  MAX_OUTPUT_TOKENS,
   MAX_TOOL_ROUNDS,
   parseAssistantRequest,
   registerAssistantRoutes,
   runAssistant,
+  type AssistantChunk,
   type AssistantClient,
 } from '../server/ai/assistant.ts';
 import {
@@ -56,62 +58,54 @@ import { executeTool, summarizeDeparture, summarizeRouteResponse, TOOL_DEFINITIO
 
 // ───────────────────────── atrapa klienta ─────────────────────────
 
-type Block = Record<string, unknown>;
-type Turn = { text?: string[]; content?: Block[]; stop_reason?: string } | { error: unknown };
+type Block = Record<string, any>;
+/** Tura modelu: delty tekstu, części z wywołaniami funkcji, powód zakończenia / blokada promptu — albo błąd. */
+type Turn = { text?: string[]; calls?: Block[]; finishReason?: string; blockReason?: string } | { error: unknown };
 
 interface FakeCall {
   params: Record<string, any>;
   signal?: AbortSignal;
 }
 
-/** Skryptowany klient: każda tura to jedna odpowiedź modelu (delty tekstu + bloki treści) albo błąd. */
+/** Skryptowany klient: każda tura to jedna odpowiedź modelu strumieniowana kawałkami (jak generateContentStream). */
 function fakeClient(script: Turn[] | ((index: number) => Turn)): { client: AssistantClient; calls: FakeCall[] } {
   const calls: FakeCall[] = [];
   const client: AssistantClient = {
-    beta: {
-      messages: {
-        stream(params, options) {
-          const index = calls.length;
-          calls.push({ params: structuredClone(params) as Record<string, any>, signal: options?.signal });
-          const turn = typeof script === 'function' ? script(index) : script[index];
-          if (!turn) throw new Error(`Brak tury ${index} w skrypcie atrapy`);
-          let listener: ((delta: string) => void) | undefined;
-          return {
-            on(_event, l) {
-              listener = l;
-              return this;
-            },
-            async finalMessage() {
-              await Promise.resolve();
-              if ('error' in turn) throw turn.error;
-              for (const delta of turn.text ?? []) listener?.(delta);
-              const text = (turn.text ?? []).join('');
-              const content = [...(text ? [{ type: 'text', text }] : []), ...(turn.content ?? [])];
-              const hasTool = content.some((b) => b.type === 'tool_use');
-              return {
-                id: `msg_${index}`,
-                type: 'message',
-                role: 'assistant',
-                model: params.model,
-                content,
-                stop_reason: turn.stop_reason ?? (hasTool ? 'tool_use' : 'end_turn'),
-                stop_sequence: null,
-                usage: { input_tokens: 10, output_tokens: 5 },
-              } as unknown as Anthropic.Beta.BetaMessage;
-            },
-          };
-        },
+    models: {
+      async generateContentStream(params) {
+        const index = calls.length;
+        const { abortSignal, ...config } = params.config ?? {};
+        calls.push({ params: structuredClone({ model: params.model, contents: params.contents, config }) as Record<string, any>, signal: abortSignal });
+        const turn = typeof script === 'function' ? script(index) : script[index];
+        if (!turn) throw new Error(`Brak tury ${index} w skrypcie atrapy`);
+        if ('error' in turn) throw turn.error;
+        const chunks: AssistantChunk[] = [];
+        if (turn.blockReason) chunks.push({ promptFeedback: { blockReason: turn.blockReason as never } });
+        for (const delta of turn.text ?? []) chunks.push({ candidates: [{ content: { role: 'model', parts: [{ text: delta }] } }] });
+        if (!turn.blockReason) {
+          chunks.push({
+            candidates: [{ content: { role: 'model', parts: turn.calls ?? [] }, finishReason: (turn.finishReason ?? 'STOP') as never }],
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+          });
+        }
+        return (async function* () {
+          for (const chunk of chunks) {
+            await Promise.resolve();
+            yield chunk;
+          }
+        })();
       },
     },
   };
   return { client, calls };
 }
 
-const toolUse = (id: string, name: string, input: unknown): Block => ({ type: 'tool_use', id, name, input });
+/** Część odpowiedzi modelu z wywołaniem funkcji; sygnatura namysłu jak w modelach Gemini 3. */
+const toolUse = (id: string, name: string, args: unknown): Block => ({ functionCall: { id, name, args }, thoughtSignature: `sig-${id}` });
 
 const NOW = new Date('2026-07-15T10:00:00Z'); // 12:00 w Krakowie
-const KEY = 'sk-ant-test-SECRET-0123456789';
-const ENV = { ANTHROPIC_API_KEY: KEY };
+const KEY = 'AIzaSy-test-SECRET-0123456789';
+const ENV = { GEMINI_API_KEY: KEY };
 
 function parseSse(body: string): AssistantEvent[] {
   return body
@@ -248,7 +242,8 @@ describe('GET /api/assistant/status', () => {
     registerAssistantRoutes(app, { env: {}, createClient });
     const status = (await app.inject({ url: '/api/assistant/status' })).json();
     expect(status.available).toBe(false);
-    expect(status.reason).toContain('ANTHROPIC_API_KEY');
+    expect(status.reason).toContain('GEMINI_API_KEY');
+    expect(status.reason).toContain('.env');
     const post = await ask(app, 'Cześć');
     expect(post.statusCode).toBe(503);
     expect(post.json().code).toBe('DATA_UNAVAILABLE');
@@ -265,8 +260,11 @@ describe('GET /api/assistant/status', () => {
 
     const app2 = Fastify();
     apps.push(app2);
-    registerAssistantRoutes(app2, { env: { ...ENV, CIEN_AI_MODEL: 'claude-sonnet-5-5' } });
-    expect((await app2.inject({ url: '/api/assistant/status' })).json()).toEqual({ available: true, model: 'claude-sonnet-5-5' });
+    // GOOGLE_API_KEY jest przyjmowany zamiennie.
+    registerAssistantRoutes(app2, { env: { GOOGLE_API_KEY: KEY, CIEN_AI_MODEL: 'gemini-3.5-flash-lite' } });
+    const res2 = await app2.inject({ url: '/api/assistant/status' });
+    expect(res2.json()).toEqual({ available: true, model: 'gemini-3.5-flash-lite' });
+    expect(res2.body).not.toContain(KEY);
   });
 });
 
@@ -279,9 +277,9 @@ describe('POST /api/assistant — pętla agenta', () => {
     const from = { lat: 50.0647, lon: 19.9236, label: 'AGH' };
     const to = { lat: 50.0541, lon: 19.9354, label: 'Wawel' };
     const { app, calls } = await buildApp([
-      { text: ['Sprawdzam ', 'miejsca.'], content: [toolUse('t1', 'geocode_place', { query: 'AGH' }), toolUse('t2', 'geocode_place', { query: 'Wawel' })] },
+      { text: ['Sprawdzam ', 'miejsca.'], calls: [toolUse('t1', 'geocode_place', { query: 'AGH' }), toolUse('t2', 'geocode_place', { query: 'Wawel' })] },
       {
-        content: [
+        calls: [
           toolUse('t3', 'plan_route', { from, to, time: '2026-07-15T15:00', mobility: 'accessible', shadePreference: 0.9 }),
           toolUse('t4', 'show_on_map', { from, to, time: '2026-07-15T15:00', mobility: 'accessible', selectProfile: 'shadiest' }),
         ],
@@ -319,45 +317,49 @@ describe('POST /api/assistant — pętla agenta', () => {
       mobility: 'accessible',
     });
 
-    // Zapytania do modelu: stały prompt z cache_control, kontekst osobno, narzędzia, namysł adaptacyjny, fallback.
+    // Zapytania do modelu: stały prompt + kontekst w systemInstruction, deklaracje funkcji, tryb AUTO, limit tokenów.
     expect(calls).toHaveLength(3);
     const first = calls[0].params;
     expect(first.model).toBe(DEFAULT_MODEL);
-    expect(first.system[0]).toEqual({ type: 'text', text: ASSISTANT_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } });
-    expect(first.system[1].text).toContain('2026-07-15 12:00');
-    expect(first.system[1].cache_control).toBeUndefined();
-    expect(first.tools.map((t: { name: string }) => t.name)).toEqual(TOOL_DEFINITIONS.map((t) => t.name));
-    expect(first.thinking).toEqual({ type: 'adaptive' });
-    expect(first.output_config).toEqual({ effort: 'medium' });
-    expect(first.fallbacks).toBe('default');
-    expect(first.betas).toEqual(['server-side-fallback-2026-07-01']);
-    expect(first.tool_choice).toBeUndefined();
-    expect(first.max_tokens).toBeLessThanOrEqual(16000);
-    // Prefiks (system + narzędzia) identyczny we wszystkich rundach — warunek trafień cache.
-    for (const call of calls) expect(JSON.stringify([call.params.system, call.params.tools])).toBe(JSON.stringify([first.system, first.tools]));
+    expect(first.config.systemInstruction.startsWith(ASSISTANT_SYSTEM_PROMPT)).toBe(true);
+    expect(first.config.systemInstruction).toContain('2026-07-15 12:00');
+    const declarations = first.config.tools[0].functionDeclarations;
+    expect(declarations.map((t: { name: string }) => t.name)).toEqual(TOOL_DEFINITIONS.map((t) => t.name));
+    expect(declarations[0].parametersJsonSchema).toEqual(TOOL_DEFINITIONS[0].parameters);
+    expect(first.config.toolConfig).toEqual({ functionCallingConfig: { mode: 'AUTO' } });
+    expect(first.config.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
+    expect(MAX_OUTPUT_TOKENS).toBeLessThanOrEqual(8192);
+    // Prefiks (instrukcja systemowa + narzędzia) identyczny we wszystkich rundach.
+    for (const call of calls) expect(JSON.stringify([call.params.config.systemInstruction, call.params.config.tools])).toBe(JSON.stringify([first.config.systemInstruction, first.config.tools]));
 
-    // Wyniki równoległych narzędzi wracają w JEDNEJ wiadomości użytkownika, bez geometrii.
-    const second = calls[1].params.messages;
+    // Historia: tura modelu wraca dosłownie (tekst + wywołania z sygnaturami namysłu), a wyniki równoległych
+    // narzędzi — w JEDNEJ turze użytkownika, w kolejności wywołań, z pasującymi id; bez geometrii.
+    const second = calls[1].params.contents;
     expect(second).toHaveLength(3);
-    expect(second[1].role).toBe('assistant');
-    expect(second[2].content.map((b: Block) => [b.type, b.tool_use_id])).toEqual([
-      ['tool_result', 't1'],
-      ['tool_result', 't2'],
+    expect(second[0]).toEqual({ role: 'user', parts: [{ text: 'Chcę dojść z AGH na Wawel około 15, z wózkiem, jak najwięcej w cieniu' }] });
+    expect(second[1].role).toBe('model');
+    expect(second[1].parts.map((p: Block) => p.text ?? p.functionCall.id)).toEqual(['Sprawdzam ', 'miejsca.', 't1', 't2']);
+    expect(second[1].parts.slice(2).map((p: Block) => p.thoughtSignature)).toEqual(['sig-t1', 'sig-t2']);
+    expect(second[2].role).toBe('user');
+    expect(second[2].parts.map((p: Block) => [p.functionResponse.id, p.functionResponse.name])).toEqual([
+      ['t1', 'geocode_place'],
+      ['t2', 'geocode_place'],
     ]);
-    const routeResult = calls[2].params.messages[4].content[0];
-    expect(routeResult.tool_use_id).toBe('t3');
-    expect(routeResult.is_error).toBeUndefined();
-    expect(routeResult.content).not.toMatch(/geometry|coords/);
-    expect(JSON.parse(routeResult.content).routes).toHaveLength(3);
+    expect(second[2].parts[0].functionResponse.response.output.results[0]).toMatchObject({ label: 'AGH, Kraków' });
+    const routeResult = calls[2].params.contents[4].parts[0].functionResponse;
+    expect(routeResult.id).toBe('t3');
+    expect(routeResult.response.error).toBeUndefined();
+    expect(JSON.stringify(routeResult.response)).not.toMatch(/geometry|coords/);
+    expect(routeResult.response.output.routes).toHaveLength(3);
     expect(res.body).not.toContain(KEY);
   });
 
-  it('błąd narzędzia wraca do modelu jako tool_result z is_error, a pętla trwa dalej', async () => {
+  it('błąd narzędzia wraca do modelu jako functionResponse z polem error, a pętla trwa dalej', async () => {
     mocks.planRoute.mockRejectedValue(new mocks.ServiceError('NO_ROUTE', 'Nie znaleziono połączenia pieszego między punktami.'));
     mocks.geocode.mockRejectedValue(new Error('ECONNRESET at secret-internal-host:1234'));
     const { app, calls } = await buildApp([
       {
-        content: [
+        calls: [
           toolUse('a', 'plan_route', { from: { lat: 50.06, lon: 19.93 }, to: { lat: 50.05, lon: 19.94 } }),
           toolUse('b', 'plan_route', { from: { lat: 19.93, lon: 50.06 }, to: { lat: 50.05, lon: 19.94 } }), // zamienione lat/lon
           toolUse('c', 'geocode_place', { query: 'Wawel' }),
@@ -376,100 +378,112 @@ describe('POST /api/assistant — pętla agenta', () => {
     expect(events.some((e) => e.type === 'text' && e.delta.includes('Nie udało się'))).toBe(true);
 
     expect(calls).toHaveLength(2);
-    const results = calls[1].params.messages[2].content as Block[];
-    expect(results.map((r) => r.is_error)).toEqual([true, true, true, true, true]);
-    expect(results[0].content).toBe('Błąd (NO_ROUTE): Nie znaleziono połączenia pieszego między punktami.');
-    expect(results[1].content).toContain('poza obszarem aplikacji');
-    expect(results[2].content).not.toContain('secret-internal-host'); // bez szczegółów wewnętrznych
-    expect(results[3].content).toContain('Nieznane narzędzie');
-    expect(results[4].content).toContain('YYYY-MM-DDTHH:mm');
+    const results = (calls[1].params.contents[2].parts as Block[]).map((p) => p.functionResponse.response as Block);
+    expect(results.map((r) => typeof r.error === 'string' && r.output === undefined)).toEqual([true, true, true, true, true]);
+    expect(results[0].error).toBe('Błąd (NO_ROUTE): Nie znaleziono połączenia pieszego między punktami.');
+    expect(results[1].error).toContain('poza obszarem aplikacji');
+    expect(results[2].error).not.toContain('secret-internal-host'); // bez szczegółów wewnętrznych
+    expect(results[3].error).toContain('Nieznane narzędzie');
+    expect(results[4].error).toContain('YYYY-MM-DDTHH:mm');
     expect(mocks.planRoute).toHaveBeenCalledTimes(1); // niepoprawne wejścia nie dochodzą do serwisu
   });
 
   it(`limit pętli: po ${MAX_TOOL_ROUNDS} rundach narzędzi ostatnie wywołanie ma wyłączone narzędzia`, async () => {
-    const { app, calls } = await buildApp((i) => ({ content: [toolUse(`g${i}`, 'get_conditions', {})] }));
+    const { app, calls } = await buildApp((i) => ({ calls: [toolUse(`g${i}`, 'get_conditions', {})] }));
     apps.push(app);
     const res = await ask(app, 'Jaka pogoda?');
     const events = parseSse(res.body);
 
     expect(calls).toHaveLength(MAX_TOOL_ROUNDS + 1);
     expect(mocks.getWeather).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS);
-    expect(calls.slice(0, -1).every((c) => c.params.tool_choice === undefined)).toBe(true);
-    expect(calls.at(-1)!.params.tool_choice).toEqual({ type: 'none' });
-    const lastUser = calls.at(-1)!.params.messages.at(-1);
-    expect(lastUser.content.at(-1)).toMatchObject({ type: 'text' });
-    expect(lastUser.content.at(-1).text).toContain('Limit kroków');
+    expect(calls.slice(0, -1).every((c) => c.params.config.toolConfig.functionCallingConfig.mode === 'AUTO')).toBe(true);
+    expect(calls.at(-1)!.params.config.toolConfig).toEqual({ functionCallingConfig: { mode: 'NONE' } });
+    const lastUser = calls.at(-1)!.params.contents.at(-1);
+    expect(lastUser.role).toBe('user');
+    expect(lastUser.parts[0].functionResponse.name).toBe('get_conditions');
+    expect(lastUser.parts.at(-1).text).toContain('Limit kroków');
     expect(events.filter((e) => e.type === 'tool')).toHaveLength(MAX_TOOL_ROUNDS);
     expect(events.at(-2)).toMatchObject({ type: 'text' }); // komunikat zamykający zamiast ciszy
     expect(events.at(-1)).toEqual({ type: 'done' });
   });
 
-  it('błędy SDK → przyjazne zdarzenie error po polsku, bez klucza i stosu', async () => {
-    const headers = new Headers();
-    const rate = new Anthropic.RateLimitError(429, { type: 'error', error: { type: 'rate_limit_error', message: `limit for key ${KEY}` } }, `limit for key ${KEY}`, headers);
-    const { app } = await buildApp([{ error: rate }]);
+  it('błędy API → przyjazne zdarzenie error po polsku, bez klucza i stosu', async () => {
+    const quota = new ApiError({ status: 429, message: `RESOURCE_EXHAUSTED: quota exceeded for key ${KEY}` });
+    const { app } = await buildApp([{ error: quota }]);
     apps.push(app);
     const res = await ask(app, 'Cześć');
     expect(res.statusCode).toBe(200);
     const events = parseSse(res.body);
-    expect(events).toEqual([{ type: 'error', message: 'Asystent obsługuje teraz zbyt wiele zapytań. Spróbuj ponownie za minutę.' }, { type: 'done' }]);
+    expect(events).toEqual([{ type: 'error', message: 'Limit zapytań do usługi AI został wyczerpany. Spróbuj ponownie za minutę.' }, { type: 'done' }]);
     expect(res.body).not.toContain(KEY);
     expect(res.body).not.toMatch(/\bat .*\(.*:\d+:\d+\)/);
 
-    const auth = new Anthropic.AuthenticationError(401, { type: 'error', error: { type: 'authentication_error', message: 'x' } }, 'x', headers);
-    const overloaded = new Anthropic.InternalServerError(529, { type: 'error', error: { type: 'overloaded_error', message: 'x' } }, 'x', headers);
-    expect(describeAssistantError(auth)).toContain('klucz API został odrzucony');
-    expect(describeAssistantError(overloaded)).toContain('przeciążona');
-    expect(describeAssistantError(new Anthropic.NotFoundError(404, undefined, 'x', headers))).toContain('CIEN_AI_MODEL');
-    expect(describeAssistantError(new Anthropic.APIConnectionError({ message: 'x' }))).toContain('połączyć');
-    expect(describeAssistantError(new Anthropic.APIUserAbortError())).toBeNull();
-    expect(describeAssistantError(new Error(`boom ${KEY}`))).not.toContain(KEY);
+    const api = (status: number, message = 'x') => new ApiError({ status, message });
+    expect(describeAssistantError(api(400, 'API key not valid. Please pass a valid API key.'))).toContain('klucz API został odrzucony');
+    expect(describeAssistantError(api(401))).toContain('klucz API został odrzucony');
+    expect(describeAssistantError(api(403))).toContain('nie ma dostępu');
+    expect(describeAssistantError(api(404))).toContain('CIEN_AI_MODEL');
+    expect(describeAssistantError(api(400, 'Invalid JSON payload'))).toContain('Zacznij nową rozmowę');
+    expect(describeAssistantError(api(500))).toContain('przeciążona');
+    expect(describeAssistantError(api(503))).toContain('przeciążona');
+    expect(describeAssistantError(new TypeError('fetch failed'))).toContain('połączyć');
+    expect(describeAssistantError(new DOMException('aborted', 'AbortError'))).toBeNull();
+    for (const err of [api(429, KEY), api(400, `API key ${KEY}`), new Error(`boom ${KEY}`), new TypeError(KEY)]) {
+      expect(describeAssistantError(err)).not.toContain(KEY);
+    }
   });
 
-  it('odmowa modelu (refusal) kończy się komunikatem, a narzędzia z tej tury nie są wykonywane', async () => {
-    const { app, calls } = await buildApp([{ content: [toolUse('x', 'get_conditions', {})], stop_reason: 'refusal' }]);
+  it('blokada bezpieczeństwa (finishReason SAFETY albo zablokowany prompt) kończy się komunikatem, bez wykonania narzędzi', async () => {
+    const { app, calls } = await buildApp([{ calls: [toolUse('x', 'get_conditions', {})], finishReason: 'SAFETY' }, { blockReason: 'PROHIBITED_CONTENT' }]);
     apps.push(app);
     const events = parseSse((await ask(app, 'coś niedozwolonego')).body);
     expect(events.map((e) => e.type)).toEqual(['error', 'done']);
+    expect(events[0]).toMatchObject({ message: expect.stringContaining('Nie mogę pomóc') });
     expect(calls).toHaveLength(1);
+    expect(mocks.getWeather).not.toHaveBeenCalled();
+    const blocked = parseSse((await ask(app, 'jeszcze raz')).body);
+    expect(blocked.map((e) => e.type)).toEqual(['error', 'done']);
+  });
+
+  it('pusta odpowiedź modelu → zdarzenie error; ucięta limitem tokenów → dopisek albo error', async () => {
+    const { app } = await buildApp([
+      {},
+      { text: ['Początek odpowiedzi'], finishReason: 'MAX_TOKENS' },
+      { calls: [toolUse('m', 'get_conditions', {})], finishReason: 'MAX_TOKENS' },
+    ]);
+    apps.push(app);
+    const empty = parseSse((await ask(app, 'Cześć')).body);
+    expect(empty).toEqual([{ type: 'error', message: 'Usługa AI nie zwróciła odpowiedzi. Spróbuj ponownie albo zadaj pytanie inaczej.' }, { type: 'done' }]);
+    const cutOff = parseSse((await ask(app, 'Cześć')).body);
+    expect(cutOff.map((e) => (e.type === 'text' ? e.delta : e.type)).join('|')).toContain('Odpowiedź została skrócona');
+    const cutCall = parseSse((await ask(app, 'Cześć')).body);
+    expect(cutCall.map((e) => e.type)).toEqual(['error', 'done']);
     expect(mocks.getWeather).not.toHaveBeenCalled();
   });
 
-  it('fallback odrzucony błędem 400 jest wyłączany i runda ponawiana bez niego', async () => {
-    const bad = new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Unexpected value(s) for the anthropic-beta header' } }, 'x', new Headers());
-    const { app, calls } = await buildApp([{ error: bad }, { text: ['Dzień dobry!'] }, { text: ['Znowu ja.'] }]);
+  it('niepoprawne wywołanie funkcji (MALFORMED_FUNCTION_CALL) jest ponawiane, a po wyczerpaniu prób → error', async () => {
+    const { app, calls } = await buildApp([{ finishReason: 'MALFORMED_FUNCTION_CALL' }, { text: ['Dzień dobry!'] }]);
     apps.push(app);
-    const events = parseSse((await ask(app, 'Cześć')).body);
-    expect(events).toEqual([{ type: 'text', delta: 'Dzień dobry!' }, { type: 'done' }]);
-    expect(calls[0].params.fallbacks).toBe('default');
-    expect(calls[1].params.fallbacks).toBeUndefined();
-    expect(calls[1].params.betas).toBeUndefined();
-    await ask(app, 'Jeszcze raz');
-    expect(calls[2].params.fallbacks).toBeUndefined(); // zapamiętane dla kolejnych zapytań
+    expect(parseSse((await ask(app, 'Cześć')).body)).toEqual([{ type: 'text', delta: 'Dzień dobry!' }, { type: 'done' }]);
+    expect(calls).toHaveLength(2);
+
+    const always = await buildApp(() => ({ finishReason: 'MALFORMED_FUNCTION_CALL' }));
+    apps.push(always.app);
+    expect(parseSse((await ask(always.app, 'Cześć')).body).map((e) => e.type)).toEqual(['error', 'done']);
+    expect(always.calls).toHaveLength(3);
   });
 
-  it('modele bez adaptacyjnego namysłu (Haiku) nie dostają thinking/effort ani fallbacku', async () => {
-    const { app, calls } = await buildApp([{ text: ['OK'] }], { env: { ...ENV, CIEN_AI_MODEL: 'claude-haiku-4-5', CIEN_AI_EFFORT: 'high' } });
-    apps.push(app);
-    await ask(app, 'Cześć');
-    expect(calls[0].params.model).toBe('claude-haiku-4-5');
-    expect(calls[0].params.thinking).toBeUndefined();
-    expect(calls[0].params.output_config).toBeUndefined();
-    expect(calls[0].params.fallbacks).toBeUndefined();
-  });
-
-  it('przerwanie przez klienta zatrzymuje pętlę i przekazuje sygnał do SDK', async () => {
+  it('przerwanie przez klienta zatrzymuje pętlę i przekazuje sygnał do SDK (config.abortSignal)', async () => {
     const controller = new AbortController();
     mocks.getWeather.mockImplementation(async () => {
       controller.abort(); // klient rozłącza się w trakcie pracy narzędzia
       return { time: NOW.toISOString(), temperatureC: null, apparentTemperatureC: null, cloudCoverPct: null, directRadiationWm2: null, uvIndex: null, source: 'unavailable' };
     });
-    const { client, calls } = fakeClient((i) => ({ content: [toolUse(`g${i}`, 'get_conditions', {})] }));
+    const { client, calls } = fakeClient((i) => ({ calls: [toolUse(`g${i}`, 'get_conditions', {})] }));
     const events: AssistantEvent[] = [];
     await runAssistant({
       client,
-      config: { model: DEFAULT_MODEL, effort: 'medium' },
-      fallbacks: { enabled: false },
+      config: { model: DEFAULT_MODEL },
       messages: [{ role: 'user', content: 'Pogoda?' }],
       now: NOW,
       emit: (e) => events.push(e),
@@ -665,8 +679,18 @@ describe('narzędzia — zwarte wyniki', () => {
   it('definicje narzędzi: stała lista sześciu narzędzi z opisami', () => {
     expect(TOOL_DEFINITIONS.map((t) => t.name)).toEqual(['geocode_place', 'plan_route', 'best_departure', 'find_cool_spots', 'get_conditions', 'show_on_map']);
     for (const tool of TOOL_DEFINITIONS) {
-      expect(tool.description!.length).toBeGreaterThan(80);
-      expect(tool.input_schema.type).toBe('object');
+      expect(tool.description.length).toBeGreaterThan(80);
+      expect(tool.parameters.type).toBe('object');
+    }
+    // Schematy używają wyłącznie słów kluczowych przyjmowanych przez deklaracje funkcji Gemini.
+    const allowed = new Set(['type', 'properties', 'required', 'description', 'enum', 'items']);
+    const walk = (schema: Record<string, any>): void => {
+      for (const key of Object.keys(schema)) expect(allowed.has(key), key).toBe(true);
+      for (const child of Object.values(schema.properties ?? {})) walk(child as Record<string, any>);
+      if (schema.items) walk(schema.items);
+    };
+    for (const tool of TOOL_DEFINITIONS) {
+      walk(tool.parameters);
     }
   });
 });

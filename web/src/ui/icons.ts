@@ -1,32 +1,21 @@
 // Ikony interfejsu jako wbudowane SVG (siatka 20×20, kreska w kolorze tekstu).
 
-import type { CoolSpotKind, ManeuverType } from '../../../shared/types.ts';
+import type { ManeuverType } from '../../../shared/types.ts';
 
 const ICONS = {
   walk: '<circle cx="11" cy="3.4" r="1.6" class="fill"/><path d="M11 7l-2 4 2.6 2.4V18M9 11l-1.6 6.5M11 7.4l2.6 2.2 2.4.4M10.4 7.2L7.4 8.6 6.6 11"/>',
   wheelchair: '<circle cx="8" cy="3.4" r="1.5" class="fill"/><path d="M8 6.5v5h4.2l2 4.3h1.8"/><path d="M6 9.6a4.6 4.6 0 1 0 6.3 5.6"/>',
   senior: '<circle cx="9" cy="3.5" r="1.6" class="fill"/><path d="M9 7c-1.4 1-2 2.4-2 4l2.2 2v5M7 11.5L5.8 18M9.4 8l2.4 2.6h2.4M14.4 10.6V18"/>',
-  auto: '<circle cx="10" cy="10" r="4.6"/><path d="M10 5.4a4.6 4.6 0 0 1 0 9.2z" class="fill"/><path d="M10 1.6v1.6M10 16.8v1.6M1.6 10h1.6M16.8 10h1.6"/>',
-  shade: '<path d="M3 17V8.2l5-3.6 5 3.6V17z" class="fill"/><path d="M13 17v-5.4l4.6 5.4z" class="fill" opacity=".5"/>',
-  sun: '<circle cx="10" cy="10" r="3.6" class="fill"/><path d="M10 1.8v2.2M10 16v2.2M1.8 10H4M16 10h2.2M4.2 4.2l1.6 1.6M14.2 14.2l1.6 1.6M4.2 15.8l1.6-1.6M14.2 5.8l1.6-1.6"/>',
-  drinking_water: '<path d="M10 2.6c3 3.6 5 6.2 5 8.7a5 5 0 0 1-10 0c0-2.5 2-5.1 5-8.7z"/>',
-  fountain: '<path d="M3 13h14l-1.5 4h-11zM10 13V6M10 6C8.6 3.8 6 4 5.6 6.6M10 6c1.4-2.2 4-2 4.4.6"/>',
-  water_mist: '<path d="M3.5 7.5c1.6-1.5 3.2-1.5 4.8 0s3.2 1.5 4.8 0 2.4-1 3.4-.4M3.5 11.5c1.6-1.5 3.2-1.5 4.8 0s3.2 1.5 4.8 0 2.4-1 3.4-.4M6 16h.01M10 16h.01M14 16h.01"/>',
-  bench: '<path d="M3 9h14M3 12h14M5 12v5M15 12v5M4 9V6M16 9V6"/>',
-  park: '<path d="M10 18v-6.4"/><path d="M10 2.6c3 0 5 2.1 5 4.8s-2 4.4-5 4.4-5-1.7-5-4.4 2-4.8 5-4.8z"/>',
-  shelter: '<path d="M2.5 9L10 3.6 17.5 9M5 8v9M15 8v9M5 13h10"/>',
   arrow: '<path d="M10 17V4M10 4L5 9M10 4l5 5"/>',
   uturn: '<path d="M6 17V8a4 4 0 0 1 8 0v6M14 14l-3-3M14 14l3-3"/>',
   cross: '<path d="M4 4v12M8 4v12M12 4v12M16 4v12"/>',
   stairs: '<path d="M3 17h4v-4h4V9h4V5h2"/>',
   flag: '<path d="M5 18V3M5 4h10l-2.5 3.5L15 11H5"/>',
   depart: '<circle cx="10" cy="10" r="3.4" class="fill"/><circle cx="10" cy="10" r="7.2"/>',
-  signal: '<rect x="6.5" y="2" width="7" height="16" rx="2.5"/><circle cx="10" cy="6" r="1.2" class="fill"/><circle cx="10" cy="10" r="1.2" class="fill"/><circle cx="10" cy="14" r="1.2" class="fill"/>',
   clock: '<circle cx="10" cy="10" r="7.5"/><path d="M10 5.5V10l3 2"/>',
   nav: '<path d="M10 2.6l6 14.4-6-3.4-6 3.4z"/>',
-  thermo: '<path d="M8 11.4V4a2 2 0 0 1 4 0v7.4a3.6 3.6 0 1 1-4 0z"/><path d="M10 8v6"/>',
-  leaf: '<path d="M4 16c0-7 4-11 12-12 0 8-4 12-11 12zM4 16l6-6"/>',
-  height: '<path d="M4 17V7.4l6-4.2 6 4.2V17zM8 17v-4h4v4"/>',
+  layers: '<path d="M10 3l7.5 4L10 11 2.5 7z"/><path d="M2.5 10.5L10 14.5l7.5-4M2.5 14L10 18l7.5-4"/>',
+  list: '<path d="M7 5h10M7 10h10M7 15h10M3 5h.01M3 10h.01M3 15h.01"/>',
   sparkle: '<path d="M9 2.5l1.5 4.2a2 2 0 0 0 1.2 1.2L16 9.5l-4.3 1.6a2 2 0 0 0-1.2 1.2L9 16.5l-1.5-4.2a2 2 0 0 0-1.2-1.2L2 9.5l4.3-1.6a2 2 0 0 0 1.2-1.2z" class="fill"/><path d="M16 2v3M14.5 3.5h3M16.5 14.5v3M15 16h3"/>',
   mic: '<rect x="7.4" y="2.2" width="5.2" height="9.6" rx="2.6"/><path d="M4.6 9.6a5.4 5.4 0 0 0 10.8 0M10 15v2.8M7 17.8h6"/>',
   send: '<path d="M10 16.5V4M10 4L5 9M10 4l5 5"/>',
@@ -56,10 +45,6 @@ export function icon(name: IconName, className = ''): SVGSVGElement {
   svg.setAttribute('class', className ? `icon ${className}` : 'icon');
   svg.innerHTML = ICONS[name]; // stałe z tego pliku, nigdy dane z sieci
   return svg;
-}
-
-export function coolSpotIcon(kind: CoolSpotKind): IconName {
-  return kind in ICONS ? (kind as IconName) : 'drinking_water';
 }
 
 /** Kąt obrotu strzałki dla manewrów „skrętnych” (0° = prosto). */

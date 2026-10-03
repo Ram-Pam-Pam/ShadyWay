@@ -174,7 +174,6 @@ describe('kontekst, podpowiedzi i opis planu', () => {
         minutes: 13 * 60,
         shadePreference: 0.7,
         mobility: 'senior',
-        comfort: 'auto',
         userLocation: { lat: 50.06, lon: 19.94 },
       }),
     ).toEqual({
@@ -195,7 +194,8 @@ describe('kontekst, podpowiedzi i opis planu', () => {
     const empty = suggestions({ from: null, to: null }, false, 'sun');
     expect(empty[0].label).toBe('Zaplanuj spacer w słońcu z Rynku Głównego na Wawel');
     expect(empty.map((item) => item.label)).not.toContain(EXPLAIN_QUESTION);
-    expect(empty.map((item) => item.label)).toEqual(expect.arrayContaining(['Kiedy najlepiej wyjść?', 'Gdzie po drodze napiję się wody?']));
+    expect(empty.map((item) => item.label)).toContain('Kiedy najlepiej wyjść?');
+    expect(empty.map((item) => item.label).join(' ')).not.toMatch(/wod|chłod/i);
   });
 
   it('opisuje zastosowany plan po polsku', () => {
@@ -212,14 +212,13 @@ describe('kontekst, podpowiedzi i opis planu', () => {
     ).toEqual([
       'Rynek Główny → Wawel',
       'wyjście środa, 15 lipca, 18:30',
-      'profil: wózek / bez schodów',
-      'tryb: szukaj cienia',
-      'przez punkt chłodu',
+      'profil: bez schodów',
       'wariant najbardziej zacieniony',
     ]);
     expect(describePlan({ to })).toEqual(['cel: Wawel']);
     expect(describePlan({ time: 'bzdura' })).toEqual([]);
-    expect(describePlan({ shadePreference: 1, comfort: 'sun' })).toEqual(['tryb: szukaj słońca', 'preferencja: maksimum słońca']);
+    // Tryb komfortu i punkt chłodu nie mają odpowiednika w interfejsie — nie są stosowane ani opisywane.
+    expect(describePlan({ shadePreference: 1, comfort: 'sun', viaCoolSpot: true })).toEqual(['preferencja: maksimum cienia']);
   });
 
   const route: RouteResult = {
@@ -252,7 +251,7 @@ describe('kontekst, podpowiedzi i opis planu', () => {
     expect(brief).toContain('Dystans 1,4 km, czas 20 min, w cieniu 62% trasy');
     expect(brief).toContain('Przejścia ze światłami: 2');
     expect(brief).toContain('Schody: brak.');
-    expect(brief).toContain('przez punkt chłodu: Fontanna na Plantach');
+    expect(brief).not.toMatch(/punkt(y)? chłodu/i);
     expect(brief).toContain('1. Ruszaj na wschód — ul. Karmelicka. Idź 240 m.');
     const prompt = explainPrompt(route, 'shade');
     expect(prompt.startsWith(EXPLAIN_QUESTION)).toBe(true);
@@ -321,8 +320,6 @@ describe('ostatnia trasa offline', () => {
     minutes: 780,
     shadePreference: 0.5,
     mobility: 'default' as const,
-    comfort: 'auto' as const,
-    viaCoolSpot: false,
     selectedProfile: 'balanced' as const,
     response,
   };

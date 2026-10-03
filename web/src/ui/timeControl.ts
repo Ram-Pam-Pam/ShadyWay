@@ -1,17 +1,16 @@
-// Wybór daty i godziny (czas Krakowa) z paskiem dnia: noc/dzień, łuk słońca, informacje o słońcu i pogodzie.
+// Wybór daty i godziny (czas Krakowa) z paskiem dnia (noc/dzień, łuk słońca) i jedną linią pogody.
 
-import type { SunInfo, WeatherInfo } from '../../../shared/types.ts';
-import { compassPoint, formatTemperature } from '../format.ts';
+import type { SunInfo } from '../../../shared/types.ts';
+import { weatherLine } from '../labels.ts';
 import type { AppState } from '../store.ts';
 import {
   SLIDER_MAX_MIN,
   formatClock,
-  formatKrakowClock,
   formatLongDate,
   isValidDateString,
   krakowMinutesOf,
 } from '../time.ts';
-import { byId, el } from '../util.ts';
+import { byId } from '../util.ts';
 
 const ARC_WIDTH = 100;
 const ARC_HEIGHT = 40;
@@ -39,7 +38,6 @@ export class TimeControl {
   private readonly band = byId<HTMLElement>('day-band');
   private readonly arc = byId<HTMLElement>('sun-arc');
   private readonly sunDot = byId<HTMLElement>('sun-dot');
-  private readonly sunInfo = byId<HTMLElement>('sun-info');
   private readonly weather = byId<HTMLElement>('weather');
 
   constructor(options: TimeControlOptions) {
@@ -64,8 +62,9 @@ export class TimeControl {
     this.nowButton.setAttribute('aria-pressed', String(state.followNow));
 
     this.renderDay(state.minutes, state.sun);
-    this.renderSunInfo(state.sun);
-    this.renderWeather(state.weather);
+    const weather = weatherLine(state.weather);
+    this.weather.hidden = weather === null;
+    this.weather.textContent = weather ?? '';
   }
 
   private renderDay(minutes: number, sun: SunInfo | null): void {
@@ -97,42 +96,5 @@ export class TimeControl {
     this.sunDot.style.left = `${percent(minutes)}%`;
     this.sunDot.style.bottom = `${((height * usable) / ARC_HEIGHT) * 100}%`;
     this.sunDot.classList.toggle('day__sun--night', height === 0);
-  }
-
-  private renderSunInfo(sun: SunInfo | null): void {
-    if (!sun) {
-      this.sunInfo.textContent = '';
-      return;
-    }
-    const parts: string[] = [];
-    if (sun.isDay) {
-      parts.push(
-        `Słońce ${Math.round(sun.altitudeDeg)}° nad horyzontem, azymut ${Math.round(sun.azimuthDeg)}° (${compassPoint(sun.azimuthDeg)})`,
-      );
-    } else {
-      parts.push('Słońce pod horyzontem');
-    }
-    const sunrise = sun.sunrise ? formatKrakowClock(sun.sunrise) : null;
-    const sunset = sun.sunset ? formatKrakowClock(sun.sunset) : null;
-    if (sunrise) parts.push(`wschód ${sunrise}`);
-    if (sunset) parts.push(`zachód ${sunset}`);
-    this.sunInfo.textContent = parts.join(' · ');
-  }
-
-  private renderWeather(weather: WeatherInfo | null): void {
-    const chips: HTMLElement[] = [];
-    const add = (label: string, value: string): void => {
-      chips.push(el('li', 'chip', el('span', 'chip__label', label), el('span', 'chip__value', value)));
-    };
-    if (weather && weather.source !== 'unavailable') {
-      if (weather.temperatureC !== null) add('Temperatura', formatTemperature(weather.temperatureC));
-      if (weather.apparentTemperatureC !== null) add('Odczuwalna', formatTemperature(weather.apparentTemperatureC));
-      if (weather.cloudCoverPct !== null) add('Zachmurzenie', `${Math.round(weather.cloudCoverPct)}%`);
-      if (weather.uvIndex !== null) add('UV', String(Math.round(weather.uvIndex)));
-    }
-    if (chips.length === 0 && weather) {
-      chips.push(el('li', 'chip chip--muted', 'Brak danych pogodowych dla tej godziny'));
-    }
-    this.weather.replaceChildren(...chips);
   }
 }

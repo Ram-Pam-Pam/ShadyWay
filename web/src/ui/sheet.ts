@@ -44,8 +44,7 @@ export class Sheet {
       top: MAP_TOP_PADDING,
       right: MAP_EDGE_PADDING,
       left: MAP_EDGE_PADDING,
-      // Na telefonie nad arkuszem leży jeszcze pasek atrybucji mapy.
-      bottom: sheet + (this.mobile.matches ? 64 : MAP_EDGE_PADDING),
+      bottom: sheet + (this.mobile.matches ? 40 : MAP_EDGE_PADDING),
     };
   }
 
