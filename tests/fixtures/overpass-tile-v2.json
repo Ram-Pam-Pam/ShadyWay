@@ -1,0 +1,252 @@
+{
+  "version": 0.6,
+  "generator": "fixture v2 (ręcznie napisany): przejścia, cechy dróg, krawężniki, drzewa zimozielone, punkty chłodu",
+  "elements": [
+    {
+      "type": "way",
+      "id": 820,
+      "tags": { "leisure": "park", "name": "Skwer Testowy" },
+      "geometry": [
+        { "lat": 50.0650, "lon": 19.9400 },
+        { "lat": 50.0650, "lon": 19.9402 },
+        { "lat": 50.0652, "lon": 19.9402 },
+        { "lat": 50.0652, "lon": 19.9400 },
+        { "lat": 50.0650, "lon": 19.9400 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 821,
+      "tags": { "leisure": "garden" },
+      "geometry": [
+        { "lat": 50.0660, "lon": 19.9400 },
+        { "lat": 50.0660, "lon": 19.9402 },
+        { "lat": 50.0662, "lon": 19.9402 },
+        { "lat": 50.0662, "lon": 19.9400 },
+        { "lat": 50.0660, "lon": 19.9400 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 822,
+      "tags": { "leisure": "park" },
+      "geometry": [
+        { "lat": 50.0670, "lon": 19.9400 },
+        { "lat": 50.0670, "lon": 19.9406 },
+        { "lat": 50.0676, "lon": 19.9406 },
+        { "lat": 50.0676, "lon": 19.9400 },
+        { "lat": 50.0670, "lon": 19.9400 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 823,
+      "tags": { "amenity": "fountain", "name": "Fontanna na placu" },
+      "geometry": [
+        { "lat": 50.0680, "lon": 19.9400 },
+        { "lat": 50.0680, "lon": 19.9401 },
+        { "lat": 50.0681, "lon": 19.9401 },
+        { "lat": 50.0681, "lon": 19.9400 },
+        { "lat": 50.0680, "lon": 19.9400 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 824,
+      "tags": { "leisure": "garden", "garden:type": "residential" },
+      "geometry": [
+        { "lat": 50.0690, "lon": 19.9400 },
+        { "lat": 50.0690, "lon": 19.9410 },
+        { "lat": 50.0700, "lon": 19.9410 },
+        { "lat": 50.0700, "lon": 19.9400 },
+        { "lat": 50.0690, "lon": 19.9400 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 825,
+      "tags": { "amenity": "bench" },
+      "geometry": [
+        { "lat": 50.0640, "lon": 19.9400 },
+        { "lat": 50.0640, "lon": 19.9402 }
+      ]
+    },
+    {
+      "type": "relation",
+      "id": 830,
+      "tags": { "type": "multipolygon", "leisure": "park", "name": "Park z dziurą" },
+      "members": [
+        {
+          "type": "way",
+          "ref": 831,
+          "role": "outer",
+          "geometry": [
+            { "lat": 50.0700, "lon": 19.9300 },
+            { "lat": 50.0700, "lon": 19.9315 },
+            { "lat": 50.0710, "lon": 19.9315 },
+            { "lat": 50.0710, "lon": 19.9300 },
+            { "lat": 50.0700, "lon": 19.9300 }
+          ]
+        },
+        {
+          "type": "way",
+          "ref": 832,
+          "role": "inner",
+          "geometry": [
+            { "lat": 50.0703, "lon": 19.9304 },
+            { "lat": 50.0703, "lon": 19.9312 },
+            { "lat": 50.0707, "lon": 19.9312 },
+            { "lat": 50.0707, "lon": 19.9304 },
+            { "lat": 50.0703, "lon": 19.9304 }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 700,
+      "tags": { "highway": "footway", "footway": "crossing", "crossing": "traffic_signals" },
+      "nodes": [70, 71, 72],
+      "geometry": [
+        { "lat": 50.0600, "lon": 19.9300 },
+        { "lat": 50.0600, "lon": 19.9301 },
+        { "lat": 50.0600, "lon": 19.9302 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 701,
+      "tags": { "highway": "footway", "footway": "crossing" },
+      "nodes": [74, 75, 76],
+      "geometry": [
+        { "lat": 50.0602, "lon": 19.9300 },
+        { "lat": 50.0602, "lon": 19.9301 },
+        { "lat": 50.0602, "lon": 19.9302 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 702,
+      "tags": { "highway": "footway", "footway": "crossing", "crossing": "uncontrolled" },
+      "nodes": [77, 78, 79],
+      "geometry": [
+        { "lat": 50.0604, "lon": 19.9300 },
+        { "lat": 50.0604, "lon": 19.9301 },
+        { "lat": 50.0604, "lon": 19.9302 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 703,
+      "tags": { "highway": "footway", "footway": "crossing", "crossing:signals": "no" },
+      "nodes": [80, 82, 81],
+      "geometry": [
+        { "lat": 50.0606, "lon": 19.9300 },
+        { "lat": 50.0606, "lon": 19.9301 },
+        { "lat": 50.0606, "lon": 19.9302 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 704,
+      "tags": { "highway": "path", "path": "crossing" },
+      "nodes": [83, 82, 84],
+      "geometry": [
+        { "lat": 50.0605, "lon": 19.9301 },
+        { "lat": 50.0606, "lon": 19.9301 },
+        { "lat": 50.0607, "lon": 19.9301 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 705,
+      "tags": { "highway": "footway", "footway": "sidewalk" },
+      "nodes": [76, 75, 85],
+      "geometry": [
+        { "lat": 50.0602, "lon": 19.9302 },
+        { "lat": 50.0602, "lon": 19.9301 },
+        { "lat": 50.0603, "lon": 19.9301 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 706,
+      "tags": {
+        "highway": "footway",
+        "surface": "Sett;asphalt",
+        "smoothness": "bad",
+        "wheelchair": "limited",
+        "incline": "8%",
+        "lit": "yes"
+      },
+      "nodes": [90, 91, 86],
+      "geometry": [
+        { "lat": 50.0610, "lon": 19.9300 },
+        { "lat": 50.0611, "lon": 19.9300 },
+        { "lat": 50.0612, "lon": 19.9300 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 707,
+      "tags": { "highway": "steps", "incline": "up", "ramp:stroller": "yes", "wheelchair": "no" },
+      "nodes": [86, 92, 87],
+      "geometry": [
+        { "lat": 50.0612, "lon": 19.9300 },
+        { "lat": 50.0613, "lon": 19.9300 },
+        { "lat": 50.0614, "lon": 19.9300 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 708,
+      "tags": { "highway": "residential", "surface": "asphalt", "sidewalk:surface": "paving_stones", "lit": "no" },
+      "nodes": [87, 88],
+      "geometry": [
+        { "lat": 50.0614, "lon": 19.9300 },
+        { "lat": 50.0616, "lon": 19.9300 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 709,
+      "tags": { "highway": "motorway" },
+      "nodes": [93, 94],
+      "geometry": [
+        { "lat": 50.0500, "lon": 19.9300 },
+        { "lat": 50.0501, "lon": 19.9310 }
+      ]
+    },
+    { "type": "node", "id": 75, "tags": { "highway": "crossing", "crossing": "traffic_signals" } },
+    { "type": "node", "id": 78, "tags": { "highway": "crossing", "crossing": "uncontrolled" } },
+    { "type": "node", "id": 82, "tags": { "highway": "traffic_signals" } },
+    { "type": "node", "id": 90, "tags": { "kerb": "raised" } },
+    { "type": "node", "id": 91, "tags": { "kerb": "lowered" } },
+    { "type": "node", "id": 92, "tags": { "kerb": "flush", "kerb:height": "5 cm" } },
+    { "type": "node", "id": 93, "tags": { "kerb": "raised" } },
+    { "type": "node", "id": 86, "tags": { "kerb": "raised", "kerb:height": "0.02" } },
+    { "type": "node", "id": 310, "lat": 50.0620, "lon": 19.9300, "tags": { "natural": "tree", "leaf_type": "needleleaved" } },
+    {
+      "type": "node",
+      "id": 311,
+      "lat": 50.0621,
+      "lon": 19.9300,
+      "tags": { "natural": "tree", "leaf_type": "needleleaved", "genus": "Larix" }
+    },
+    { "type": "node", "id": 312, "lat": 50.0622, "lon": 19.9300, "tags": { "natural": "tree", "species": "Picea abies" } },
+    { "type": "node", "id": 313, "lat": 50.0623, "lon": 19.9300, "tags": { "natural": "tree", "leaf_cycle": "evergreen" } },
+    { "type": "node", "id": 314, "lat": 50.0624, "lon": 19.9300, "tags": { "natural": "tree", "leaf_type": "broadleaved" } },
+    { "type": "node", "id": 315, "lat": 50.0625, "lon": 19.9300, "tags": { "natural": "tree", "species:pl": "Cis pospolity" } },
+    { "type": "node", "id": 316, "lat": 50.0626, "lon": 19.9300, "tags": { "natural": "tree", "genus": "Tilia" } },
+    { "type": "node", "id": 800, "lat": 50.0630, "lon": 19.9300, "tags": { "amenity": "drinking_water" } },
+    { "type": "node", "id": 801, "lat": 50.0631, "lon": 19.9300, "tags": { "amenity": "fountain", "name": "  Fontanna  " } },
+    { "type": "node", "id": 802, "lat": 50.0632, "lon": 19.9300, "tags": { "amenity": "fountain", "fountain": "mist" } },
+    { "type": "node", "id": 803, "lat": 50.0633, "lon": 19.9300, "tags": { "name": "Kurtyna wodna" } },
+    { "type": "node", "id": 804, "lat": 50.0634, "lon": 19.9300, "tags": { "amenity": "bench", "backrest": "yes" } },
+    { "type": "node", "id": 805, "lat": 50.0635, "lon": 19.9300, "tags": { "amenity": "shelter" } },
+    { "type": "node", "id": 806, "lat": 50.0636, "lon": 19.9300, "tags": { "man_made": "water_tap" } },
+    { "type": "node", "id": 807, "lat": 50.0637, "lon": 19.9300, "tags": { "man_made": "water_tap", "drinking_water": "no" } },
+    { "type": "node", "id": 808, "lat": 50.0638, "lon": 19.9300, "tags": { "amenity": "drinking_water", "access": "private" } },
+    { "type": "node", "id": 809, "lat": 50.0639, "lon": 19.9300, "tags": { "amenity": "fountain", "drinking_water": "yes" } }
+  ]
+}

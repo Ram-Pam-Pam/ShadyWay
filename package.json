@@ -1,0 +1,39 @@
+{
+  "name": "cien",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cień — nawigacja piesza po Krakowie minimalizująca ekspozycję na słońce",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "prefetch": "tsx server/scripts/prefetch.ts",
+    "prefetch-lidar": "tsx server/scripts/prefetch-lidar.ts",
+    "fetch-lst": "tsx server/scripts/fetch-lst.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@fastify/static": "^10.1.5",
+    "fastify": "^5.12.5",
+    "geotiff": "^3.0.5",
+    "maplibre-gl": "^6.11.2",
+    "pngjs": "^7.0.0",
+    "polygon-clipping": "^0.15.7",
+    "proj4": "^2.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pngjs": "^6.0.5",
+    "@types/proj4": "^2.5.6",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}

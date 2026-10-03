@@ -1,0 +1,16 @@
+{
+  "bounds": [
+    19.78,
+    49.9599,
+    20.22016,
+    50.13
+  ],
+  "width": 1048,
+  "height": 630,
+  "p5": 27.32,
+  "p50": 31.78,
+  "p95": 36.13,
+  "min": 22.78,
+  "max": 52.01,
+  "source": "Landsat 8/9 Collection 2 Level-2, temperatura powierzchni (ST_B10), kompozyt medianowy 5 letnich scen: LC09_L2SP_188025_20240813_02_T1 (landsat-9, 2024-08-13); LC09_L2SP_188025_20240829_02_T1 (landsat-9, 2024-08-29); LC09_L2SP_188025_20260803_02_T1 (landsat-9, 2026-08-03); LC08_L2SP_188025_20260624_02_T1 (landsat-8, 2026-06-24); LC08_L2SP_188025_20260827_02_T1 (landsat-8, 2026-08-27). Źródło: USGS / Microsoft Planetary Computer."
+}

@@ -1,0 +1,2101 @@
+/* Cień — jasny, spokojny interfejs; indygo = cień, bursztyn = słońce. */
+
+:root {
+  --ink: #1b1a3a;
+  --muted: #5a5c76;
+  --bg: #f5f5fa;
+  --surface: #ffffff;
+  --line: #e2e2ee;
+  --line-strong: #c9c9dc;
+
+  --shade-900: #272462;
+  --shade-700: #3d37a6;
+  --shade-500: #6d67e4;
+  --shade-100: #e9e8f8;
+  --shade-50: #f4f3fc;
+
+  --sun-600: #b45309;
+  --sun-500: #f59e0b;
+  --sun-300: #fcd34d;
+  --sun-100: #fef3c7;
+  --sun-50: #fffbeb;
+
+  --danger-700: #9f1239;
+  --danger-50: #fff1f3;
+  --danger-200: #fecdd3;
+
+  --radius: 14px;
+  --radius-small: 10px;
+  --shadow: 0 1px 2px rgba(27, 26, 58, 0.06), 0 6px 20px rgba(27, 26, 58, 0.08);
+  --thumb: 22px;
+  --panel-width: 380px;
+
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+  padding: 0;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+:focus-visible {
+  outline: 3px solid var(--shade-500);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ───────────── układ ───────────── */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--panel-width) minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  z-index: 5;
+}
+
+.panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sheet-handle {
+  display: none;
+}
+
+.map-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+}
+
+.map--picking .maplibregl-canvas {
+  cursor: crosshair;
+}
+
+/* ───────────── marka ───────────── */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 2px 4px;
+}
+
+.brand__mark {
+  flex: none;
+  width: 40px;
+  height: 40px;
+}
+
+.brand__name {
+  font-size: 24px;
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--shade-900);
+}
+
+.brand__tagline {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ───────────── karty ───────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card__title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.card > .card__title {
+  margin-bottom: 10px;
+}
+
+.card__value {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--shade-700);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hint {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.meta-line {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  min-height: 1.45em;
+}
+
+/* ───────────── przyciski ───────────── */
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.icon-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-button svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+.icon-button:hover {
+  background: var(--shade-100);
+  color: var(--shade-900);
+}
+
+.icon-button--framed {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.icon-button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.icon-button.is-busy svg {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.chip-button {
+  min-height: 32px;
+  padding: 4px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--shade-900);
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.chip-button:hover {
+  background: var(--shade-100);
+}
+
+.chip-button[aria-pressed='true'] {
+  background: var(--shade-900);
+  border-color: var(--shade-900);
+  color: #fff;
+}
+
+/* ───────────── start i cel ───────────── */
+
+.places {
+  display: grid;
+  gap: 8px;
+}
+
+.place {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.place__badge {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--shade-900);
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--shade-900);
+  background: var(--surface);
+}
+
+.place__badge--to {
+  background: var(--shade-900);
+  color: #fff;
+}
+
+.place__field {
+  position: relative;
+}
+
+.place__input {
+  width: 100%;
+  height: 44px;
+  padding: 0 40px 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.place__input::placeholder {
+  color: #6b6d86;
+  font-size: 14px;
+}
+
+.place--active .place__input {
+  border-color: var(--shade-700);
+  box-shadow: 0 0 0 3px var(--shade-100);
+}
+
+.place--active .place__badge {
+  box-shadow: 0 0 0 4px var(--sun-300);
+}
+
+.place__clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 40px;
+  height: 40px;
+}
+
+.place__clear svg {
+  width: 16px;
+  height: 16px;
+}
+
+.suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  box-shadow: var(--shadow);
+}
+
+.suggestions__option {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.suggestions__option:hover,
+.suggestions__option[aria-selected='true'] {
+  background: var(--shade-100);
+}
+
+.suggestions__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.suggestions__detail {
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.suggestions__message {
+  padding: 10px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+/* ───────────── czas ───────────── */
+
+.time-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.date-input {
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  font-size: 16px;
+}
+
+.time-row__clock {
+  text-align: right;
+}
+
+.clock {
+  display: block;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 44px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--shade-900);
+}
+
+.day {
+  margin-top: 6px;
+}
+
+/* Tor suwaka: kciuk przesuwa się między środkami skrajnych pozycji, stąd wcięcie o pół kciuka. */
+.day__sky,
+.day__band,
+.day__ticks {
+  margin-inline: calc(var(--thumb) / 2);
+}
+
+.day__sky {
+  position: relative;
+  height: 36px;
+}
+
+.day__arc {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.day__arc path {
+  fill: none;
+  stroke: var(--sun-500);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.day__sun {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--sun-500);
+  box-shadow:
+    0 0 0 3px rgba(245, 158, 11, 0.25),
+    0 0 10px rgba(245, 158, 11, 0.6);
+  transform: translate(-50%, 50%);
+}
+
+.day__sun--night {
+  background: #a9a7d6;
+  box-shadow: 0 0 0 3px rgba(61, 55, 166, 0.15);
+}
+
+.day__band {
+  height: 8px;
+  border-radius: 4px;
+  background: #cfd0e2;
+}
+
+.day__band--known {
+  background: linear-gradient(
+    90deg,
+    var(--shade-900) 0,
+    var(--shade-900) calc(var(--sunrise) - 2.5%),
+    var(--sun-500) calc(var(--sunrise) + 2.5%),
+    var(--sun-300) 50%,
+    var(--sun-500) calc(var(--sunset) - 2.5%),
+    var(--shade-900) calc(var(--sunset) + 2.5%),
+    var(--shade-900) 100%
+  );
+}
+
+.day__ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* ───────────── suwaki ───────────── */
+
+.slider {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track, transparent);
+}
+
+.slider::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track, transparent);
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((8px - var(--thumb)) / 2);
+  border: 3px solid var(--shade-900);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(27, 26, 58, 0.35);
+}
+
+.slider::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 3px solid var(--shade-900);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(27, 26, 58, 0.35);
+  box-sizing: border-box;
+}
+
+/* Suwak dnia leży na pasku noc/dzień: środek kciuka pokrywa się ze środkiem paska (8 px). */
+.slider--day {
+  position: relative;
+  margin-top: -18px;
+}
+
+.slider--pref {
+  --track: linear-gradient(90deg, #c4c6d8, var(--shade-700));
+}
+
+.slider-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ───────────── pogoda ───────────── */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chips:empty {
+  display: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--shade-50);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.chip__label {
+  color: var(--muted);
+}
+
+.chip__value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip--muted {
+  color: var(--muted);
+}
+
+/* ───────────── komunikaty ───────────── */
+
+.notice {
+  padding: 10px 12px;
+  border-radius: var(--radius-small);
+  font-size: 13.5px;
+}
+
+.notice--error {
+  margin-top: 10px;
+  background: var(--danger-50);
+  border: 1px solid var(--danger-200);
+  color: var(--danger-700);
+}
+
+.card--routes .notice--error {
+  margin-top: 0;
+}
+
+.notice--warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-right: 4px;
+  background: var(--sun-50);
+  border: 1px solid var(--sun-300);
+  color: #6b3a05;
+}
+
+.notice__body {
+  flex: 1;
+  display: grid;
+  gap: 4px;
+  padding-top: 1px;
+}
+
+.notice__close {
+  width: 32px;
+  height: 32px;
+  margin: -4px 0;
+  font-size: 20px;
+  line-height: 1;
+  color: #6b3a05;
+}
+
+.status--loading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 0 10px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.spinner {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 2.5px solid var(--shade-100);
+  border-top-color: var(--shade-700);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.empty__lead {
+  font-size: 14px;
+}
+
+.empty__steps {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  counter-reset: step;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.empty__steps li {
+  position: relative;
+  padding-left: 30px;
+  counter-increment: step;
+}
+
+.empty__steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: var(--shade-100);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--shade-900);
+}
+
+.empty__steps li.is-done {
+  color: var(--ink);
+}
+
+.empty__steps li.is-done::before {
+  content: '✓';
+  background: var(--shade-900);
+  color: #fff;
+}
+
+/* ───────────── karty tras ───────────── */
+
+.routes {
+  display: grid;
+  gap: 8px;
+  transition: opacity 0.2s;
+}
+
+.routes--stale {
+  opacity: 0.55;
+}
+
+.route {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.route:hover {
+  border-color: var(--line-strong);
+  background: var(--shade-50);
+}
+
+.route[aria-pressed='true'] {
+  border-color: var(--shade-700);
+  background: var(--shade-50);
+  box-shadow: 0 0 0 3px var(--shade-100);
+}
+
+.route__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.route__label {
+  font-weight: 700;
+}
+
+.route__shade {
+  flex: none;
+  font-size: 13px;
+  color: var(--shade-900);
+}
+
+.route__shade strong {
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.shadebar {
+  height: 8px;
+  margin: 8px 0 10px;
+  border-radius: 4px;
+  background: var(--sun-500);
+  overflow: hidden;
+}
+
+.shadebar__shade {
+  height: 100%;
+  background: var(--shade-900);
+  border-right: 2px solid #fff;
+}
+
+.route__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.route__stat dt {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.route__stat dd {
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────────── legendy ───────────── */
+
+.legend {
+  margin-top: 12px;
+}
+
+.legend--inset {
+  margin: 0 0 4px 50px;
+}
+
+.legend__bar {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.legend__ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.legend__source {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ───────────── przełączniki warstw ───────────── */
+
+.toggles {
+  display: grid;
+  gap: 4px;
+}
+
+.toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+}
+
+.toggle__switch {
+  flex: none;
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: #b9bbcf;
+  transition: background-color 0.15s;
+}
+
+.toggle__switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(27, 26, 58, 0.3);
+  transition: transform 0.15s;
+}
+
+.toggle input:checked + .toggle__switch {
+  background: var(--shade-700);
+}
+
+.toggle input:checked + .toggle__switch::after {
+  transform: translateX(16px);
+}
+
+.toggle input:focus-visible + .toggle__switch {
+  outline: 3px solid var(--shade-500);
+  outline-offset: 2px;
+}
+
+.toggle input:disabled ~ * {
+  opacity: 0.55;
+}
+
+.toggle:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.toggle__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.toggle__name {
+  font-weight: 600;
+}
+
+.toggle__note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.credits {
+  padding: 2px 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ───────────── elementy na mapie ───────────── */
+
+.map-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 3;
+  max-width: calc(100% - 120px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--shade-900);
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.map-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  height: 3px;
+  overflow: hidden;
+  background: var(--shade-100);
+}
+
+.map-progress::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, var(--shade-700), var(--sun-500));
+  animation: slide 1.2s ease-in-out infinite;
+}
+
+/* Znacznik: obrócony kwadrat z jednym ostrym rogiem daje „łezkę” z czubkiem w punkcie na mapie. */
+.pin {
+  width: 30px;
+  height: 37px;
+  cursor: grab;
+}
+
+.pin::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 30px;
+  height: 30px;
+  border: 2.5px solid var(--shade-900);
+  border-radius: 50% 50% 50% 0;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(27, 26, 58, 0.4);
+  transform: rotate(-45deg);
+}
+
+.pin span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--shade-900);
+}
+
+.pin--to::before {
+  background: var(--shade-900);
+  border-color: #fff;
+}
+
+.pin--to span {
+  color: #fff;
+}
+
+.segment-popup .maplibregl-popup-content {
+  padding: 12px 14px;
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.segment-popup .maplibregl-popup-close-button {
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.segment {
+  min-width: 170px;
+}
+
+.segment__title {
+  padding-right: 18px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.segment__details {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.segment__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.segment__row dt {
+  color: var(--muted);
+}
+
+.segment__row dd {
+  font-weight: 650;
+  text-align: right;
+}
+
+.segment__side {
+  margin-top: 8px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: var(--shade-900);
+  color: #fff;
+  font-weight: 650;
+}
+
+.maplibregl-ctrl-attrib {
+  font-size: 11px;
+}
+
+/* ═════════════ v2: profile, tryb komfortu, punkty chłodu, „Kiedy wyjść?”, wskazówki ═════════════ */
+
+.icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ───────────── zakładki panelu ───────────── */
+
+.tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--shade-100);
+}
+
+.tabs__tab {
+  min-height: 38px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.tabs__tab[aria-selected='true'] {
+  background: var(--surface);
+  color: var(--shade-900);
+  box-shadow: 0 1px 3px rgba(27, 26, 58, 0.18);
+}
+
+/* ───────────── przełączniki segmentowe ───────────── */
+
+.segmented {
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+}
+
+.segmented legend {
+  padding: 0;
+}
+
+.segmented__options {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--shade-100);
+}
+
+.segmented__option {
+  position: relative;
+  display: flex;
+  cursor: pointer;
+}
+
+.segmented__option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segmented__face {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 54px;
+  padding: 6px 4px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--muted);
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.segmented__option:hover .segmented__face {
+  color: var(--shade-900);
+}
+
+.segmented__option input:checked + .segmented__face {
+  background: var(--shade-900);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(27, 26, 58, 0.3);
+}
+
+.segmented__option input:focus-visible + .segmented__face {
+  outline: 3px solid var(--shade-500);
+  outline-offset: 2px;
+}
+
+.comfort-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-small);
+  background: var(--shade-50);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--shade-900);
+}
+
+.comfort-badge[data-applied='sun'] {
+  background: var(--sun-50);
+  border-color: var(--sun-300);
+  color: #6b3a05;
+}
+
+.comfort-badge[data-applied='sun'] .icon {
+  color: var(--sun-600);
+}
+
+.pref {
+  margin-top: 4px;
+}
+
+.pref__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.pref__title {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.toggle--top {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* ───────────── „Kiedy wyjść?” ───────────── */
+
+.departure {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.chip-button--wide {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  border-radius: var(--radius-small);
+  text-align: left;
+}
+
+.chip-button__chevron {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+
+.chip-button[aria-expanded='true'] .chip-button__chevron {
+  transform: rotate(180deg);
+}
+
+.chip-button--small {
+  min-height: 28px;
+  padding: 2px 12px;
+  font-size: 12.5px;
+}
+
+.departure__body {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.departure__body .status--loading {
+  padding: 0;
+}
+
+.departure__body .notice--error,
+.departure__hint {
+  margin-top: 0;
+}
+
+.departure__window {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.departure__window .field-label {
+  margin: 0;
+}
+
+.departure__chips {
+  display: flex;
+  gap: 6px;
+}
+
+.departure__summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  background: var(--sun-50);
+  border: 1px solid var(--sun-300);
+  font-size: 13.5px;
+  font-weight: 650;
+  color: #6b3a05;
+}
+
+.departure__summary .icon {
+  margin-top: 1px;
+  color: var(--sun-600);
+}
+
+.dchart__plot {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 104px;
+  padding-top: 16px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.dchart__slot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+}
+
+.dchart__slot:hover,
+.dchart__slot:focus-visible {
+  background: var(--shade-100);
+}
+
+.dchart__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--h, 6%);
+  max-width: 22px;
+  margin-inline: auto;
+  border-radius: 4px 4px 0 0;
+}
+
+.dchart__slot[aria-pressed='true'] .dchart__bar {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.dchart__best {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--h, 6%) + 1px);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  color: var(--sun-600);
+}
+
+.dchart__axis {
+  display: flex;
+  gap: 2px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.dchart__axis span {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dchart__readout {
+  min-height: 2.9em;
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.dchart__caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dchart__ramp-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dchart__ramp {
+  display: inline-block;
+  width: 44px;
+  height: 8px;
+  border-radius: 4px;
+}
+
+/* ───────────── karty tras: szczegóły ───────────── */
+
+.route__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 12px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Kategoria obciążenia cieplnego i punkt chłodu to plakietki; pozostałe fakty to zwykły tekst z ikoną. */
+.fact--stress,
+.fact--via {
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.fact .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.fact--via {
+  background: #e0f2fe;
+  border-color: #bae6fd;
+  color: #075985;
+}
+
+.fact--via .icon {
+  color: #0369a1;
+}
+
+.stress__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.stress--cold {
+  background: #e0f2fe;
+  border-color: #bae6fd;
+  color: #075985;
+}
+
+.stress--none {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.stress--moderate {
+  background: #fef9c3;
+  border-color: #fde68a;
+  color: #713f12;
+}
+
+.stress--strong {
+  background: #ffedd5;
+  border-color: #fed7aa;
+  color: #7c2d12;
+}
+
+.stress--very_strong {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #7f1d1d;
+}
+
+.stress--extreme {
+  background: #7f1d1d;
+  border-color: #7f1d1d;
+  color: #fff;
+}
+
+.route__detail {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.route__actions:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+.action-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: var(--shade-900);
+  font-weight: 700;
+  color: #fff;
+}
+
+.action-button:hover {
+  background: var(--shade-700);
+}
+
+.steps {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.steps__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.steps__summary::-webkit-details-marker {
+  display: none;
+}
+
+.steps__summary::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  margin: 0 4px 3px 0;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+}
+
+.steps[open] .steps__summary::after {
+  margin-bottom: -3px;
+  transform: rotate(-135deg);
+}
+
+.steps__count {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.steps__list {
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.steps__list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.step:hover,
+.step:focus-visible,
+.step[aria-current] {
+  background: var(--shade-50);
+}
+
+.step[aria-current] {
+  box-shadow: inset 3px 0 0 var(--sun-500);
+}
+
+.step__icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--shade-100);
+  color: var(--shade-900);
+}
+
+.step__icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.step__text {
+  padding-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.step__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.step__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.step__dot--shade {
+  background: #2d2a86;
+}
+
+.step__dot--mixed {
+  background: #b86a96;
+}
+
+.step__dot--sun {
+  background: var(--sun-500);
+}
+
+.quality {
+  margin-top: 10px;
+}
+
+.quality__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.badge .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.badge--good {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.badge[aria-expanded='true'] {
+  box-shadow: 0 0 0 2px var(--shade-100);
+}
+
+.quality__note {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ───────────── punkty chłodu i krok trasy na mapie ───────────── */
+
+/* Uwaga: MapLibre pozycjonuje znaczniki własnością transform — nie nadpisywać jej tutaj. */
+.spot {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #0e7490;
+  color: #fff;
+  box-shadow: 0 1px 5px rgba(27, 26, 58, 0.45);
+}
+
+.spot .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.spot--fountain {
+  background: #0369a1;
+}
+
+.spot--water_mist {
+  background: #0891b2;
+}
+
+.spot--bench {
+  background: #6b5646;
+}
+
+.spot--park {
+  background: #15803d;
+}
+
+.spot--shelter {
+  background: #475569;
+}
+
+/* Obwódka: indygo = punkt w cieniu, bursztyn = w słońcu (o wybranej godzinie). */
+.spot--shaded {
+  box-shadow:
+    0 0 0 3px var(--shade-900),
+    0 1px 5px rgba(27, 26, 58, 0.45);
+}
+
+.spot--sunny {
+  box-shadow:
+    0 0 0 3px var(--sun-500),
+    0 1px 5px rgba(27, 26, 58, 0.45);
+}
+
+.spot--layer {
+  width: 26px;
+  height: 26px;
+}
+
+.spot--layer .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Przy oddalonej mapie punkty przy trasie są mniejsze, żeby jej nie zasłaniać. */
+.map--far .spot:not(.spot--via) {
+  width: 20px;
+  height: 20px;
+  border-width: 1.5px;
+}
+
+.map--far .spot:not(.spot--via) .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.spot--via {
+  width: 40px;
+  height: 40px;
+  border-width: 3px;
+  z-index: 2;
+}
+
+.spot--via .icon {
+  width: 21px;
+  height: 21px;
+}
+
+.spot--via::after {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border: 2px dashed #0e7490;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.spot:focus-visible {
+  outline: 3px solid var(--shade-500);
+  outline-offset: 4px;
+}
+
+.spot-popup__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.spot-popup__meta:empty {
+  display: none;
+}
+
+.spot-popup__shade {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 650;
+}
+
+.spot-popup__shade--shaded {
+  background: var(--shade-900);
+  color: #fff;
+}
+
+.spot-popup__shade--sunny {
+  background: var(--sun-100);
+  color: #6b3a05;
+}
+
+.spot-popup__note {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.spot-popup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.step-marker {
+  width: 26px;
+  height: 26px;
+  border: 4px solid var(--sun-500);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 0 0 2px var(--shade-900),
+    0 2px 8px rgba(27, 26, 58, 0.45);
+  pointer-events: none;
+}
+
+.nav-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+/* ───────────── tryb zimowy („szukam słońca”): akcenty bursztynowe ───────────── */
+
+:root[data-comfort='sun'] .slider--pref {
+  --track: linear-gradient(90deg, #c4c6d8, var(--sun-500));
+}
+
+:root[data-comfort='sun'] .card__value,
+:root[data-comfort='sun'] .route__shade {
+  color: var(--sun-600);
+}
+
+:root[data-comfort='sun'] .route[aria-pressed='true'] {
+  border-color: var(--sun-500);
+  background: var(--sun-50);
+  box-shadow: 0 0 0 3px var(--sun-100);
+}
+
+:root[data-comfort='sun'] .shadebar__shade {
+  background: #7f89ad;
+}
+
+/* ───────────── telefon: mapa na cały ekran + dolny arkusz ───────────── */
+
+@media (max-width: 719px) {
+  .app {
+    display: block;
+  }
+
+  .map-wrap {
+    position: fixed;
+    inset: 0;
+  }
+
+  .panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 58vh;
+    max-height: 58dvh;
+    border-right: 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -6px 24px rgba(27, 26, 58, 0.18);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .panel__body {
+    padding: 4px 12px 12px;
+    gap: 10px;
+    scrollbar-gutter: auto;
+  }
+
+  .panel__section {
+    gap: 10px;
+  }
+
+  .segmented__face {
+    font-size: 12px;
+  }
+
+  .panel--collapsed .panel__body {
+    display: none;
+  }
+
+  .sheet-handle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    width: 100%;
+    min-height: 48px;
+    padding: 8px 16px 8px;
+    border: 0;
+    border-radius: 18px 18px 0 0;
+    background: transparent;
+  }
+
+  .sheet-handle__grip {
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line-strong);
+  }
+
+  .sheet-handle__summary {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--shade-900);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .brand {
+    gap: 10px;
+    padding-bottom: 0;
+  }
+
+  .brand__mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .brand__name {
+    font-size: 19px;
+  }
+
+  .brand__tagline {
+    font-size: 12.5px;
+  }
+
+  .card {
+    padding: 12px;
+  }
+
+  /* Kontrolki przy dolnej krawędzi mapy podnosimy ponad arkusz. */
+  .map-wrap .maplibregl-ctrl-bottom-left,
+  .map-wrap .maplibregl-ctrl-bottom-right {
+    bottom: var(--sheet-height, 0px);
+  }
+
+  .map-wrap .maplibregl-ctrl-scale {
+    display: none;
+  }
+
+  .map-hint {
+    max-width: calc(100% - 110px);
+    left: 12px;
+    transform: none;
+    text-align: left;
+    border-radius: 14px;
+  }
+}
+
+/* ───────────── animacje ───────────── */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .spinner {
+    border-top-color: var(--shade-700);
+    border-right-color: var(--shade-700);
+  }
+
+  .map-progress::after {
+    width: 100%;
+    transform: none;
+  }
+}

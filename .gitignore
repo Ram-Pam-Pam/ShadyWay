@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/osm/
+data/lidar/
+data/cache/
+.workflow/
+*.log
+.env
+.env.*
