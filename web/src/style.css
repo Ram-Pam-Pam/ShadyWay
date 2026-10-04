@@ -1520,6 +1520,9 @@ button {
     border: 0;
     border-radius: 18px 18px 0 0;
     background: transparent;
+    /* Uchwyt się przeciąga — przeglądarka nie może w tym czasie przewijać ani odświeżać strony gestem. */
+    touch-action: none;
+    cursor: grab;
   }
 
   .sheet-handle__grip {
