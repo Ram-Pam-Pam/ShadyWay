@@ -1,4 +1,4 @@
-// „Asystent Canopy”: endpointy GET /api/assistant/status i POST /api/assistant (Server-Sent Events).
+// „Asystent FRIGUS”: endpointy GET /api/assistant/status i POST /api/assistant (Server-Sent Events).
 //
 // Asystent to pętla agenta na Gemini API (Google): model planuje narzędziami z tools.ts (geokodowanie,
 // trasa, najlepsza godzina, pogoda, sterowanie aplikacją: mapa, nawigacja, warstwy), a serwer strumieniuje do UI

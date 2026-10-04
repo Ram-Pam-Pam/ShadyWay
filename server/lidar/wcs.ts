@@ -63,7 +63,7 @@ export const WCS_SOURCES: Record<LidarLayer, LayerSource> = {
 };
 
 export const TARGET_CELL_M = 1;
-const USER_AGENT = 'Canopy/2.0 (piesza nawigacja w cieniu, Krakow; projekt niekomercyjny)';
+const USER_AGENT = 'FRIGUS/2.0 (piesza nawigacja w cieniu, Krakow; projekt niekomercyjny)';
 const MAX_CONCURRENCY = 2;
 const RETRIES = 2;
 const RETRY_DELAY_MS = [3_000, 10_000];

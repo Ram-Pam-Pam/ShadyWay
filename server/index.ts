@@ -1,4 +1,4 @@
-// Serwer HTTP aplikacji "Canopy": API (kontrakt w shared/types.ts) oraz — gdy istnieje dist/ — zbudowany frontend.
+// Serwer HTTP aplikacji "FRIGUS": API (kontrakt w shared/types.ts) oraz — gdy istnieje dist/ — zbudowany frontend.
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -174,7 +174,7 @@ app.setNotFoundHandler((request, reply) => {
 
 try {
   await app.listen({ port: PORT, host: HOST });
-  console.log(`Canopy — serwer działa: http://localhost:${PORT}${hasFrontend ? '' : ' (samo API; frontend: npm run dev albo npm run build)'}`);
+  console.log(`FRIGUS — serwer działa: http://localhost:${PORT}${hasFrontend ? '' : ' (samo API; frontend: npm run dev albo npm run build)'}`);
 } catch (error) {
   console.error(`Nie udało się uruchomić serwera na porcie ${PORT}: ${(error as Error).message}`);
   process.exit(1);

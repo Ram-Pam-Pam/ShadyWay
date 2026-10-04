@@ -1,4 +1,4 @@
-# Canopy — piesza nawigacja po Krakowie w cieniu
+# FRIGUS — piesza nawigacja po Krakowie w cieniu
 
 Aplikacja webowa typu smart city: prowadzi pieszego z punktu A do B po chodnikach i ścieżkach tak, żeby
 o wybranej dacie i godzinie jak najmniej iść w słońcu (a zimą — odwrotnie: jak najwięcej). Dla każdego

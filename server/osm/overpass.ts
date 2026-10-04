@@ -45,7 +45,7 @@ export const OVERPASS_MIRRORS: readonly string[] = [
 ];
 
 // Uwaga: overpass.openstreetmap.fr odpowiada 403 na domyślny User-Agent Node.js i na UA zawierające "Node.js".
-const USER_AGENT = 'Canopy-SmartCity-Krakow/0.1 (nawigacja piesza w cieniu)';
+const USER_AGENT = 'FRIGUS-SmartCity-Krakow/0.1 (nawigacja piesza w cieniu)';
 
 export interface OverpassClientOptions {
   mirrors?: readonly string[];

@@ -1,4 +1,4 @@
-// Service worker aplikacji „Canopy” (pisany ręcznie, bez wtyczek do budowania).
+// Service worker aplikacji „FRIGUS” (pisany ręcznie, bez wtyczek do budowania).
 //  - powłoka aplikacji: index.html w trybie stale-while-revalidate, z zapasowym index.html dla nawigacji offline;
 //  - /assets/* (pliki Vite z hashem w nazwie, niezmienne): najpierw pamięć, potem sieć;
 //  - podkład mapy (kafle, styl, czcionki, ikony z OpenFreeMap): pamięć o ograniczonym rozmiarze;

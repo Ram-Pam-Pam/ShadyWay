@@ -1,8 +1,8 @@
 {
-  "name": "canopy",
+  "name": "frigus",
   "version": "0.1.0",
   "private": true,
-  "description": "Canopy — nawigacja piesza po Krakowie minimalizująca ekspozycję na słońce",
+  "description": "FRIGUS — nawigacja piesza po Krakowie minimalizująca ekspozycję na słońce",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",

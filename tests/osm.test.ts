@@ -884,7 +884,7 @@ describe('klient Overpass', () => {
         hits.push(url);
         expect(init.method).toBe('POST');
         expect(String(init.body)).toMatch(/^data=/);
-        expect((init.headers as Record<string, string>)['User-Agent']).toMatch(/Canopy/);
+        expect((init.headers as Record<string, string>)['User-Agent']).toMatch(/FRIGUS/);
         return url.startsWith('https://a.') ? ok('<html>429</html>', 429) : ok('{"elements":[{"type":"node","id":1}]}');
       }) as typeof fetch,
     });

@@ -6,17 +6,46 @@
     <meta name="theme-color" content="#272462" />
     <meta
       name="description"
-      content="Canopy — piesza nawigacja po Krakowie, która prowadzi zacienioną stroną ulicy. Trasy uwzględniają położenie słońca, wysokość budynków, drzewa i temperaturę powierzchni."
+      content="FRIGUS — piesza nawigacja po Krakowie, która prowadzi zacienioną stroną ulicy. Trasy uwzględniają położenie słońca, wysokość budynków, drzewa i temperaturę powierzchni."
     />
-    <title>Canopy — chodź po Krakowie chłodniejszą stroną ulicy</title>
+    <title>FRIGUS — chodź po Krakowie chłodniejszą stroną ulicy</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="Canopy" />
+    <meta name="apple-mobile-web-app-title" content="FRIGUS" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- Ekran ładowania: style wpisane w HTML, żeby nie mignął nieostylowany dokument, zanim wczytają się arkusze. -->
+    <style>
+      html:not(.app-ready) #app { visibility: hidden; }
+      #splash {
+        position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 18px; background: #f4f3fa; color: #272462;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; transition: opacity 0.3s ease;
+      }
+      #splash svg { width: 72px; height: 72px; }
+      #splash .splash__name { margin: 0; font-size: 34px; font-weight: 800; letter-spacing: 0.22em; padding-left: 0.22em; }
+      #splash .splash__bar { width: 132px; height: 4px; border-radius: 4px; background: #dddbf0; overflow: hidden; }
+      #splash .splash__bar::after {
+        content: ''; display: block; width: 40%; height: 100%; border-radius: 4px; background: #f59e0b;
+        animation: splash-slide 1.1s ease-in-out infinite;
+      }
+      @keyframes splash-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+      @media (prefers-reduced-motion: reduce) { #splash .splash__bar::after { animation: none; width: 100%; } }
+      html.app-ready #splash { opacity: 0; pointer-events: none; }
+    </style>
+    <noscript><style>#splash { display: none; } html #app { visibility: visible; }</style></noscript>
   </head>
   <body>
+    <div id="splash" role="status" aria-label="Ładowanie aplikacji FRIGUS">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="27" cy="13" r="8" fill="#f59e0b" />
+        <path d="M4 36 L4 18 L16 10 L28 18 L28 36 Z" fill="#272462" />
+        <path d="M28 36 L28 24 L38 36 Z" fill="#272462" opacity="0.45" />
+      </svg>
+      <p class="splash__name">FRIGUS</p>
+      <div class="splash__bar"></div>
+    </div>
     <div id="app" class="app">
       <aside id="panel" class="panel" aria-label="Planowanie trasy">
         <button
@@ -39,7 +68,7 @@
               <path d="M4 36 L4 18 L16 10 L28 18 L28 36 Z" fill="#272462" />
               <path d="M28 36 L28 24 L38 36 Z" fill="#272462" opacity="0.45" />
             </svg>
-            <h1 class="brand__name">Canopy</h1>
+            <h1 class="brand__name">FRIGUS</h1>
           </header>
 
           <!-- Zakładki panelu: pasek jest ukryty, dopóki moduł asystenta nie włączy zakładki „Asystent” (ui/tabs.ts). -->
@@ -261,7 +290,7 @@
         <div id="nav-overlay" class="nav-overlay" hidden></div>
       </main>
     </div>
-    <noscript>Aplikacja Canopy wymaga włączonej obsługi JavaScript.</noscript>
+    <noscript>Aplikacja FRIGUS wymaga włączonej obsługi JavaScript.</noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -552,3 +552,7 @@ installDepartureHint(app);
 installAssistant(app);
 installNavigation(app);
 installPwa(app);
+
+// Style są już wczytane (importy na górze pliku) — odsłoń aplikację i zdejmij ekran ładowania z index.html.
+document.documentElement.classList.add('app-ready');
+window.setTimeout(() => document.getElementById('splash')?.remove(), 400);

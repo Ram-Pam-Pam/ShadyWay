@@ -1,4 +1,4 @@
-// Narzędzia „Asystenta Canopy”: definicje dla modelu, walidacja wejścia i wykonanie po stronie serwera.
+// Narzędzia „Asystenta FRIGUS”: definicje dla modelu, walidacja wejścia i wykonanie po stronie serwera.
 //
 // Zasady:
 //  - wejście od modelu jest niezaufane — każde pole jest sprawdzane przed użyciem (schemat w deklaracji

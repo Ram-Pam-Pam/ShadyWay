@@ -1,4 +1,4 @@
-// „Asystent Canopy”: czat z asystentem AI w zakładce panelu (na telefonie — arkusz na całą wysokość).
+// „Asystent FRIGUS”: czat z asystentem AI w zakładce panelu (na telefonie — arkusz na całą wysokość).
 // Odpowiedź przychodzi strumieniem zdarzeń (tekst, czynności, plan); plan wykonuje w aplikacji assistant/planRunner.ts.
 // Z asystentem można pisać albo rozmawiać głosem (features/assistantVoice.ts).
 
@@ -61,7 +61,7 @@ export function installAssistant(app: App): AssistantHandle {
   const reset = el('button', 'chip-button chip-button--small', icon('plus'), el('span', '', 'Nowa rozmowa'));
   reset.type = 'button';
   reset.hidden = true;
-  const title = el('h2', 'assistant__title', 'Asystent Canopy');
+  const title = el('h2', 'assistant__title', 'Asystent FRIGUS');
   title.id = 'assistant-title';
   const head = el('header', 'assistant__head', el('span', 'assistant__mark', icon('sparkle')), el('div', 'assistant__heading', title, subtitle), reset);
 
@@ -99,7 +99,7 @@ export function installAssistant(app: App): AssistantHandle {
   const fab = el('button', 'assistant-fab', icon('sparkle'), el('span', 'assistant-fab__label', 'Asystent'));
   fab.type = 'button';
   fab.id = 'assistant-fab';
-  fab.setAttribute('aria-label', 'Otwórz Asystenta Canopy');
+  fab.setAttribute('aria-label', 'Otwórz Asystenta FRIGUS');
   byId<HTMLElement>('map-wrap').append(fab);
 
   // ───────────── widok ─────────────
