@@ -951,7 +951,8 @@ class RouteSession {
     if (way.covered || way.kind === 'covered' || lengthM < MIN_EDGE_M) return 0;
     const sun = this.sunAt(bucket);
     if (sun.altitude <= 0) return 0;
-    return Math.min(1, Math.max(0, this.ctx.scene.polylineExposure(line, sun)));
+    // v3: na moście pieszy stoi na pomoście — pomost (i to, co pod nim) go nie zacienia.
+    return Math.min(1, Math.max(0, this.ctx.scene.polylineExposure(line, sun, undefined, way.bridge === true)));
   }
 
   /** Ekspozycja krawędzi po danej stronie ('C' = oś) w danym przedziale czasu; wynik trafia do cache. */

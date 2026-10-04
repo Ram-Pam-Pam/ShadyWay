@@ -335,3 +335,14 @@ export type AssistantEvent =
  *  POST /api/assistant        body: AssistantRequest        -> text/event-stream z AssistantEvent
  *        (gdy asystent niedostępny -> 503 ApiError DATA_UNAVAILABLE)
  */
+
+// ───────────── v3: asystent steruje aplikacją ─────────────
+/** Rozszerzenie AssistantPlan — czynności w interfejsie, które asystent może wykonać za użytkownika. */
+export interface AssistantPlan {
+  /** Uruchom nawigację krok po kroku dla zaznaczonej trasy (po jej przeliczeniu). */
+  startNavigation?: boolean;
+  /** Włącz/wyłącz warstwy mapy; pola nieobecne = bez zmian. */
+  layers?: { shadows?: boolean; heat?: boolean; buildings3d?: boolean };
+  /** Otwórz wykres „Kiedy wyjść?”. */
+  openDeparture?: boolean;
+}

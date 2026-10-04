@@ -8,11 +8,28 @@
 //    oczu (1,5 m) maszeruje po rastrze, a tłumienie zależy od długości drogi przez warstwę koron (Beer–Lambert),
 //  - raster terenu: punkt i podstawy obiektów mają własne rzędne, a sam teren też może zasłonić słońce,
 //  - sun.leafOff: korony liściaste przepuszczają większość światła (dotyczy modelu OSM i rastra).
+//
+// v3:
+//  - lidar.crownBase: dolna granica koron per komórka (analiza nDSM — lidar/heights.ts) zamiast stałego ułamka,
+//  - drzewa z OSM oznaczone jako zimozielone zachowują pełne tłumienie zimą także w rastrze,
+//  - lidar.decks: pomosty mostów. Pieszy NA moście (onBridge) patrzy z poziomu pomostu, więc ani pomost, ani nic
+//    poniżej go nie zacienia; punkt pod pomostem (nie na moście) jest w pełnym cieniu,
+//  - teren: luki w danych wypełniane najbliższą znaną wartością (bez sztucznych progów), a zasłanianie słońca
+//    przez teren liczone tylko tam, gdzie teren jest znany.
 
 import polygonClipping from 'polygon-clipping';
 import type { MultiPolygon, Polygon, Ring } from 'polygon-clipping';
 import type { AreaData, HeightRaster, IShadeScene, ShadowPolygon, SunPosition } from '../contracts.ts';
 import { toLonLat } from '../geo/project.ts';
+import { CROWN_BASE_UNIT_M, type BridgeDeck } from '../lidar/heights.ts';
+
+declare module '../contracts.ts' {
+  interface IShadeScene {
+    /** v3: `onBridge` — punkt leży na pomoście mostu (WalkWay.bridge): pomost i to, co pod nim, nie zacienia. */
+    exposureAt(x: number, y: number, sun: SunPosition, onBridge?: boolean): number;
+    polylineExposure(coords: number[], sun: SunPosition, stepM?: number, onBridge?: boolean): number;
+  }
+}
 
 const CELL_M = 40;
 const MAX_CELLS = 4_000_000;
@@ -43,6 +60,7 @@ const EYE_M = 1.5;
 /** Współczynniki osłabienia (1/m): 6 m drogi przez koronę przepuszcza 25% światła latem i 70% w sezonie bezlistnym. */
 const VEG_K_LEAF_ON = Math.log(4) / 6;
 const VEG_K_LEAF_OFF = -Math.log(0.7) / 6;
+const EVERGREEN_WEIGHT = VEG_K_LEAF_ON / VEG_K_LEAF_OFF;
 /** Dolna granica warstwy koron: max(2 m, 35% wysokości) — pod nią promień biegnie między pniami. */
 const CROWN_BASE_MIN_M = 2;
 const CROWN_BASE_FRACTION = 0.35;
@@ -53,6 +71,9 @@ const VEG_RISE_PER_STEP_M = 2;
 /** Bloki zgrubnej siatki maksimów (2^n komórek): promień powyżej maksimum bloku i sąsiadów przeskakuje cały blok. */
 const VEG_BLOCK_SHIFT = 3;
 const TERRAIN_BLOCK_SHIFT = 2;
+/** Pod pomostem da się przejść (i jest tam cień), gdy pomost jest co najmniej tyle nad terenem. */
+const DECK_MIN_CLEARANCE_M = 2.5;
+const DECK_INDEX_CELL_M = 25;
 
 /** Maska cieni do wizualizacji (roślinność z rastra, cień terenu). */
 const MASK_CELL_M = 2.5;
@@ -89,6 +110,27 @@ interface RasterGrid {
   shift: number;
   coarseCols: number;
   coarse: Float32Array;
+  /** Teren: 1 = rzędna z danych, 0 = wypełniona z sąsiedztwa (taka komórka nie zasłania słońca). */
+  known?: Uint8Array;
+  /** Roślinność: dolna granica koron (jednostki CROWN_BASE_UNIT_M; 0 = reguła stała). */
+  crownBase?: Uint8Array | null;
+  /** Roślinność: komórki pod koronami drzew zimozielonych z OSM (null = brak takich). */
+  evergreen?: Set<number> | null;
+}
+
+/** Indeks pomostów: siatka nad prostokątem otaczającym wszystkie pomosty, w komórce lista pomostów (CSR). */
+interface DeckIndex {
+  decks: BridgeDeck[];
+  boxes: Float64Array;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  inv: number;
+  nx: number;
+  ny: number;
+  start: Int32Array;
+  items: Int32Array;
 }
 
 type SceneInput = Pick<AreaData, 'buildings' | 'trees' | 'canopies' | 'lidar'>;
@@ -123,6 +165,7 @@ export class ShadeScene implements IShadeScene {
 
   private readonly terrain: RasterGrid | null;
   private readonly vegetation: RasterGrid | null;
+  private readonly decks: DeckIndex | null;
 
   private readonly minX: number;
   private readonly minY: number;
@@ -141,7 +184,8 @@ export class ShadeScene implements IShadeScene {
   constructor(area: SceneInput) {
     const terrain = prepareTerrain(area.lidar?.terrain ?? null);
     this.terrain = terrain;
-    this.vegetation = prepareVegetation(area.lidar?.vegetation ?? null, terrain);
+    this.vegetation = prepareVegetation(area.lidar?.vegetation ?? null, terrain, area.lidar?.crownBase ?? null);
+    this.decks = buildDeckIndex(area.lidar?.decks ?? []);
     // Raster roślinności zastępuje model drzew z OSM (obejmuje też drzewa niezmapowane). Drzewa i zadrzewienia
     // z OSM zostają tylko tam, gdzie raster nie ma danych (NaN — kafel LiDAR jeszcze niepobrany — lub poza zasięgiem).
     const vegetationRaster = area.lidar?.vegetation ?? null;
@@ -255,6 +299,7 @@ export class ShadeScene implements IShadeScene {
       maxHeight = Math.max(maxHeight, base + t.height);
     });
     this.maxHeight = maxHeight;
+    if (this.vegetation) this.vegetation.evergreen = evergreenCells(this.vegetation, area.trees);
 
     if (minX > maxX) {
       minX = minY = 0;
@@ -414,17 +459,51 @@ export class ShadeScene implements IShadeScene {
     return false;
   }
 
-  exposureAt(x: number, y: number, sun: SunPosition): number {
+  /**
+   * Pomost zawierający punkt wraz z jego wysokością nad terenem w tym punkcie albo null.
+   * (Z rastrem terenu: rzędna wierzchu pomostu minus rzędna terenu; bez niego: mediana wysokości pomostu.)
+   */
+  private deckAt(x: number, y: number, ground: number): number | null {
+    const index = this.decks;
+    if (index === null || x < index.minX || x >= index.maxX || y < index.minY || y >= index.maxY) return null;
+    const c = ((y - index.minY) * index.inv | 0) * index.nx + ((x - index.minX) * index.inv | 0);
+    let best: number | null = null;
+    for (let i = index.start[c], end = index.start[c + 1]; i < end; i++) {
+      const d = index.items[i];
+      const k = d * BOX_STRIDE;
+      const box = index.boxes;
+      if (x < box[k] || x > box[k + 2] || y < box[k + 1] || y > box[k + 3]) continue;
+      const deck = index.decks[d];
+      if (!ringContainsPoint(deck.ring, x, y)) continue;
+      const height = this.terrain ? deck.topZ - ground : deck.heightM;
+      if (best === null || height > best) best = height;
+    }
+    return best;
+  }
+
+  exposureAt(x: number, y: number, sun: SunPosition, onBridge = false): number {
     if (!(sun.altitude > 0)) return 0;
     const tanAlt = Math.tan(sun.altitude);
     const dx = Math.sin(sun.azimuth);
     const dy = Math.cos(sun.azimuth);
     const leafOff = sun.leafOff === true;
     const { terrain, vegetation } = this;
-    if (terrain === null && vegetation === null) return this.castObjects(x, y, dx, dy, tanAlt, 0, leafOff);
+    if (terrain === null && vegetation === null && this.decks === null) {
+      return this.castObjects(x, y, dx, dy, tanAlt, 0, leafOff);
+    }
 
     // Budynki (i drzewa z OSM): promień z poziomu gruntu, jak w v1, ale z rzędnymi terenu.
-    const ground = terrain ? terrainAt(terrain, x, y) : 0;
+    let ground = terrain ? terrainAt(terrain, x, y) : 0;
+    if (this.decks !== null) {
+      const deckHeight = this.deckAt(x, y, ground);
+      if (deckHeight !== null) {
+        // Pieszy na moście stoi na pomoście: promień startuje z jego poziomu, więc pomost i wszystko poniżej
+        // (także resztki pomostu w rastrze roślinności i skarpy pod mostem) go nie zacienia.
+        if (onBridge) ground += Math.max(0, deckHeight);
+        // Punkt pod pomostem (droga, która nie jest mostem): pełny cień, o ile pod pomostem jest prześwit.
+        else if (deckHeight >= DECK_MIN_CLEARANCE_M) return 0;
+      }
+    }
     let exposure = this.castObjects(x, y, dx, dy, tanAlt, ground, leafOff);
     if (exposure === 0) return 0;
     const eye = ground + EYE_M;
@@ -445,7 +524,7 @@ export class ShadeScene implements IShadeScene {
     const rise = t.max - z0;
     if (rise <= 0) return false;
     const maxD = Math.min(rise / tanAlt, MAX_RAY_M);
-    const { x0, y0, inv, cols, rows, shift, coarse, coarseCols } = t;
+    const { x0, y0, inv, cols, rows, shift, coarse, coarseCols, known } = t;
     const step = t.cell;
     // Skok o blok minus komórkę: interpolacja sięga o jedną komórkę poza punkt.
     const jump = Math.max(step, ((1 << shift) - 1) * step);
@@ -463,7 +542,7 @@ export class ShadeScene implements IShadeScene {
         d += jump;
         continue;
       }
-      if (z < terrainAt(t, px, py)) return true;
+      if (z < terrainAt(t, px, py) && (known === undefined || known[row * cols + col] === 1)) return true;
       d += step;
     }
     return false;
@@ -490,6 +569,9 @@ export class ShadeScene implements IShadeScene {
     if (rise <= 0) return 1;
     const { x0, y0, inv, cols, rows, data, shift, coarse, coarseCols } = v;
     const terrain = this.terrain;
+    const bases = v.crownBase ?? null;
+    // Zimą korony drzew zimozielonych tłumią jak latem: droga przez nie liczy się z wagą k_lato / k_zima.
+    const evergreen = leafOff ? (v.evergreen ?? null) : null;
 
     // Obcięcie do zasięgu rastra.
     let dStart = 0;
@@ -550,11 +632,13 @@ export class ShadeScene implements IShadeScene {
       if (h > CROWN_BASE_MIN_M) {
         const groundZ = terrain ? terrainAt(terrain, px, py) : 0;
         const top = groundZ + h;
-        const crownBase = groundZ + Math.max(CROWN_BASE_MIN_M, CROWN_BASE_FRACTION * h);
+        const stored = bases !== null ? bases[row * cols + col] : 0;
+        const crownBase =
+          groundZ + (stored > 0 ? stored * CROWN_BASE_UNIT_M : Math.max(CROWN_BASE_MIN_M, CROWN_BASE_FRACTION * h));
         const zHigh = zLow + stepRise;
         const overlap = (zHigh < top ? zHigh : top) - (zLow > crownBase ? zLow : crownBase);
         if (overlap > 0) {
-          through += overlap;
+          through += evergreen !== null && evergreen.has(row * cols + col) ? overlap * EVERGREEN_WEIGHT : overlap;
           if (through >= opaque) return MIN_VEGETATION_EXPOSURE;
         }
       }
@@ -709,14 +793,14 @@ export class ShadeScene implements IShadeScene {
     return exposure < MIN_VEGETATION_EXPOSURE ? MIN_VEGETATION_EXPOSURE : exposure;
   }
 
-  polylineExposure(coords: number[], sun: SunPosition, stepM: number = DEFAULT_STEP_M): number {
+  polylineExposure(coords: number[], sun: SunPosition, stepM: number = DEFAULT_STEP_M, onBridge = false): number {
     const pointCount = coords.length >> 1;
     if (pointCount === 0 || !(sun.altitude > 0)) return 0;
     let total = 0;
     for (let i = 1; i < pointCount; i++) {
       total += Math.hypot(coords[2 * i] - coords[2 * i - 2], coords[2 * i + 1] - coords[2 * i - 1]);
     }
-    if (total === 0) return this.exposureAt(coords[0], coords[1], sun);
+    if (total === 0) return this.exposureAt(coords[0], coords[1], sun, onBridge);
 
     // Próbki w środkach równych odcinków długości łuku — końce polilinii (często tuż przy
     // ścianie lub na skrzyżowaniu) nie zawyżają ani nie zaniżają średniej.
@@ -743,6 +827,7 @@ export class ShadeScene implements IShadeScene {
         x0 + (coords[2 * seg] - x0) * f,
         y0 + (coords[2 * seg + 1] - y0) * f,
         sun,
+        onBridge,
       );
     }
     return sum / samples;
@@ -854,6 +939,8 @@ export class ShadeScene implements IShadeScene {
       for (let i = 0; i < cols; i++) {
         const x = (i0 + i + 0.5) * cell;
         const ground = terrain ? terrainAt(terrain, x, y) : 0;
+        // Mapa pokazuje wierzch pomostu, a maska liczy cień na poziomie terenu pod nim — na mostach jej nie rysujemy.
+        if (this.decks !== null && this.deckAt(x, y, ground) !== null) continue;
         const eye = ground + EYE_M;
         let value = 0;
         if (terrain && this.terrainBlocks(x, y, dx, dy, tanAlt, eye)) value = MASK_TERRAIN;
@@ -1016,40 +1103,39 @@ function buildCoarse(
 }
 
 /**
- * Raster terenu bez dziur: komórki NaN wypełniane od sąsiadów (kolejne pierścienie), a odcięte wyspy średnią —
- * dzięki temu rzędna jest określona wszędzie (poza rastrem: wartość z najbliższej krawędzi).
+ * Raster terenu bez dziur: każda komórka NaN (np. cały kafel LiDAR jeszcze niepobrany) dostaje rzędną NAJBLIŻSZEJ
+ * znanej komórki (przeszukiwanie wszerz od wszystkich znanych naraz), więc na granicy danych nie powstaje sztuczny
+ * próg. Rzędna jest określona wszędzie (poza rastrem: wartość z najbliższej krawędzi), ale komórki wypełnione
+ * są oznaczone jako nieznane (known = 0) i nie zasłaniają słońca.
  */
 function prepareTerrain(raster: HeightRaster | null): RasterGrid | null {
   if (!validRaster(raster)) return null;
   const { cols, rows } = raster;
   const count = cols * rows;
   const data = Float32Array.from(raster.data.subarray(0, count));
-  let pending: number[] = [];
-  let sum = 0;
+  const known = new Uint8Array(count);
+  const queue = new Int32Array(count);
+  let tail = 0;
   for (let i = 0; i < count; i++) {
-    if (Number.isFinite(data[i])) sum += data[i];
-    else pending.push(i);
-  }
-  if (pending.length === count) return null;
-  const mean = sum / (count - pending.length);
-  for (let pass = 0; pass < 64 && pending.length > 0; pass++) {
-    const fills: number[] = [];
-    const rest: number[] = [];
-    for (const i of pending) {
-      const col = i % cols;
-      let total = 0;
-      let n = 0;
-      if (col > 0 && Number.isFinite(data[i - 1])) (total += data[i - 1]), n++;
-      if (col < cols - 1 && Number.isFinite(data[i + 1])) (total += data[i + 1]), n++;
-      if (i >= cols && Number.isFinite(data[i - cols])) (total += data[i - cols]), n++;
-      if (i + cols < count && Number.isFinite(data[i + cols])) (total += data[i + cols]), n++;
-      if (n > 0) fills.push(i, total / n);
-      else rest.push(i);
+    if (Number.isFinite(data[i])) {
+      known[i] = 1;
+      queue[tail++] = i;
     }
-    for (let f = 0; f < fills.length; f += 2) data[fills[f]] = fills[f + 1];
-    pending = rest;
   }
-  for (const i of pending) data[i] = mean;
+  if (tail === 0) return null;
+  const complete = tail === count;
+  if (!complete) {
+    const filled = Uint8Array.from(known);
+    for (let head = 0; head < tail; head++) {
+      const i = queue[head];
+      const col = i % cols;
+      const value = data[i];
+      if (col > 0 && !filled[i - 1]) (filled[i - 1] = 1), (data[i - 1] = value), (queue[tail++] = i - 1);
+      if (col < cols - 1 && !filled[i + 1]) (filled[i + 1] = 1), (data[i + 1] = value), (queue[tail++] = i + 1);
+      if (i >= cols && !filled[i - cols]) (filled[i - cols] = 1), (data[i - cols] = value), (queue[tail++] = i - cols);
+      if (i + cols < count && !filled[i + cols]) (filled[i + cols] = 1), (data[i + cols] = value), (queue[tail++] = i + cols);
+    }
+  }
 
   const shift = TERRAIN_BLOCK_SHIFT;
   const { coarse, coarseCols, max } = buildCoarse(cols, rows, shift, (i) => data[i]);
@@ -1065,11 +1151,16 @@ function prepareTerrain(raster: HeightRaster | null): RasterGrid | null {
     shift,
     coarse,
     coarseCols,
+    ...(complete ? {} : { known }),
   };
 }
 
 /** Raster roślinności; siatka zgrubna i maksimum liczone dla rzędnych szczytów koron (teren + wysokość). */
-function prepareVegetation(raster: HeightRaster | null, terrain: RasterGrid | null): RasterGrid | null {
+function prepareVegetation(
+  raster: HeightRaster | null,
+  terrain: RasterGrid | null,
+  crownBase: Uint8Array | null,
+): RasterGrid | null {
   if (!validRaster(raster)) return null;
   const { cols, rows, data, x0, y0, cellM } = raster;
   const shift = VEG_BLOCK_SHIFT;
@@ -1082,7 +1173,91 @@ function prepareVegetation(raster: HeightRaster | null, terrain: RasterGrid | nu
   });
   // Raster bez żadnej roślinności nadal zastępuje drzewa z OSM (tam, gdzie ma dane), ale nie wymaga marszu.
   if (max === -Infinity) return null;
-  return { x0, y0, cell: cellM, inv: 1 / cellM, cols, rows, data, max, shift, coarse, coarseCols };
+  const bases = crownBase !== null && crownBase.length >= cols * rows ? crownBase : null;
+  return { x0, y0, cell: cellM, inv: 1 / cellM, cols, rows, data, max, shift, coarse, coarseCols, crownBase: bases };
+}
+
+/** Komórki rastra roślinności pod koronami drzew z OSM oznaczonych jako zimozielone (null, gdy takich nie ma). */
+function evergreenCells(v: RasterGrid, trees: AreaData['trees']): Set<number> | null {
+  let cells: Set<number> | null = null;
+  for (const tree of trees) {
+    if (tree.evergreen !== true || !(tree.crownRadius > 0)) continue;
+    const r = tree.crownRadius;
+    const colFrom = Math.max(0, Math.floor((tree.x - r - v.x0) * v.inv));
+    const colTo = Math.min(v.cols - 1, Math.floor((tree.x + r - v.x0) * v.inv));
+    const rowFrom = Math.max(0, Math.floor((tree.y - r - v.y0) * v.inv));
+    const rowTo = Math.min(v.rows - 1, Math.floor((tree.y + r - v.y0) * v.inv));
+    for (let row = rowFrom; row <= rowTo; row++) {
+      for (let col = colFrom; col <= colTo; col++) {
+        const cx = v.x0 + (col + 0.5) * v.cell - tree.x;
+        const cy = v.y0 + (row + 0.5) * v.cell - tree.y;
+        if (cx * cx + cy * cy > (r + v.cell * 0.5) ** 2 || !(v.data[row * v.cols + col] > 0)) continue;
+        (cells ??= new Set()).add(row * v.cols + col);
+      }
+    }
+  }
+  return cells;
+}
+
+function ringContainsPoint(ring: number[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+    const yi = ring[i + 1];
+    const yj = ring[j + 1];
+    if (yi > y !== yj > y && x < ring[i] + ((ring[j] - ring[i]) * (y - yi)) / (yj - yi)) inside = !inside;
+  }
+  return inside;
+}
+
+function buildDeckIndex(decks: BridgeDeck[]): DeckIndex | null {
+  const usable = decks.filter((deck) => deck.ring.length >= 8);
+  if (usable.length === 0) return null;
+  const boxes = new Float64Array(usable.length * BOX_STRIDE);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  usable.forEach((deck, d) => {
+    let bx0 = Infinity;
+    let by0 = Infinity;
+    let bx1 = -Infinity;
+    let by1 = -Infinity;
+    for (let i = 0; i + 1 < deck.ring.length; i += 2) {
+      bx0 = Math.min(bx0, deck.ring[i]);
+      bx1 = Math.max(bx1, deck.ring[i]);
+      by0 = Math.min(by0, deck.ring[i + 1]);
+      by1 = Math.max(by1, deck.ring[i + 1]);
+    }
+    boxes.set([bx0, by0, bx1, by1], d * BOX_STRIDE);
+    minX = Math.min(minX, bx0);
+    minY = Math.min(minY, by0);
+    maxX = Math.max(maxX, bx1);
+    maxY = Math.max(maxY, by1);
+  });
+  maxX += 1e-6;
+  maxY += 1e-6;
+  const cell = Math.max(DECK_INDEX_CELL_M, Math.sqrt(((maxX - minX) * (maxY - minY)) / 1_000_000));
+  const inv = 1 / cell;
+  const nx = Math.max(1, Math.ceil((maxX - minX) * inv));
+  const ny = Math.max(1, Math.ceil((maxY - minY) * inv));
+  const cellOf = (v: number, min: number, n: number): number => Math.min(n - 1, Math.max(0, ((v - min) * inv) | 0));
+  const start = new Int32Array(nx * ny + 1);
+  const each = (visit: (c: number, d: number) => void): void => {
+    for (let d = 0; d < usable.length; d++) {
+      const k = d * BOX_STRIDE;
+      const cx1 = cellOf(boxes[k + 2], minX, nx);
+      const cy1 = cellOf(boxes[k + 3], minY, ny);
+      for (let cy = cellOf(boxes[k + 1], minY, ny); cy <= cy1; cy++) {
+        for (let cx = cellOf(boxes[k], minX, nx); cx <= cx1; cx++) visit(cy * nx + cx, d);
+      }
+    }
+  };
+  each((c) => start[c + 1]++);
+  for (let c = 0; c < nx * ny; c++) start[c + 1] += start[c];
+  const items = new Int32Array(start[nx * ny]);
+  const fill = start.slice(0, -1);
+  each((c, d) => (items[fill[c]++] = d));
+  return { decks: usable, boxes, minX, minY, maxX, maxY, inv, nx, ny, start, items };
 }
 
 /** Rzędna terenu: interpolacja dwuliniowa między środkami komórek, poza rastrem wartość z krawędzi. */

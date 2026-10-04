@@ -1,7 +1,7 @@
-// „Asystent Cienia”: endpointy GET /api/assistant/status i POST /api/assistant (Server-Sent Events).
+// „Asystent Canopy”: endpointy GET /api/assistant/status i POST /api/assistant (Server-Sent Events).
 //
 // Asystent to pętla agenta na Gemini API (Google): model planuje narzędziami z tools.ts (geokodowanie,
-// trasa, najlepsza godzina, punkty chłodu, pogoda, pokazanie planu na mapie), a serwer strumieniuje do UI
+// trasa, najlepsza godzina, pogoda, sterowanie aplikacją: mapa, nawigacja, warstwy), a serwer strumieniuje do UI
 // zdarzenia AssistantEvent. Konfiguracja wyłącznie ze zmiennych środowiskowych (skrypty npm wczytują
 // plik .env z katalogu projektu):
 //
@@ -34,16 +34,21 @@ import { executeTool, TOOL_DEFINITIONS, toolLabel } from './tools.ts';
 // ───────────────────────── konfiguracja ─────────────────────────
 
 /**
- * Domyślny model: Gemini 3.8 Flash — bieżący stabilny model klasy „flash”; to jego używają przykłady
- * wywoływania funkcji w dokumentacji. Wybór na podstawie (sprawdzone 2026-10-04):
- *   https://ai.google.dev/gemini-api/docs/models            — lista modeli; „gemini-3.8-flash” ma status Stable,
- *   https://ai.google.dev/gemini-api/docs/function-calling  — przykłady function calling na „gemini-3.8-flash”,
- *   https://ai.google.dev/gemini-api/docs/pricing           — 0,75 / 3,75 USD za milion tokenów wejścia/wyjścia
- *                                                             do 31.12.2026 (potem 1,50 / 7,50); jest darmowy poziom.
- * Tańsza alternatywa przez CIEN_AI_MODEL: gemini-3.5-flash-lite (0,30 / 2,50 USD) — może słabiej planować
- * wieloetapowe zapytania z narzędziami.
+ * Domyślny model: Gemini 3.5 Flash-Lite — najtańszy bieżący model bez zapowiedzianej daty wyłączenia, który
+ * obsługuje wywoływanie funkcji. Wybór na podstawie (sprawdzone 2026-10-04):
+ *   https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite — status Stable, „Function calling: Supported”,
+ *   https://ai.google.dev/gemini-api/docs/pricing       — 0,30 / 2,50 USD za milion tokenów wejścia/wyjścia
+ *                                                         (gemini-3.8-flash: 0,75 / 3,75 do 31.12.2026, potem drożej);
+ *                                                         jest darmowy poziom,
+ *   https://ai.google.dev/gemini-api/docs/deprecations  — brak daty wyłączenia.
+ * Modele „lite” słabiej planują wieloetapowe zapytania, dlatego prompt (prompt.ts) podaje gotowe przepisy kroków.
+ * Inne opcje przez CIEN_AI_MODEL:
+ *   gemini-3.8-flash       — mocniejszy i droższy (lepsze planowanie z narzędziami),
+ *   gemini-3.1-flash-lite  — jeszcze tańszy (0,25 / 1,50 USD), ale z datą wyłączenia 7.05.2027,
+ *   gemini-2.5-flash-lite  — najtańszy w cenniku (0,10 / 0,40 USD), starsza generacja; wg strony wycofań modele 2.5
+ *                            są dostępne dla kont z wcześniejszym użyciem, więc nie nadaje się na wartość domyślną.
  */
-export const DEFAULT_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
 /** Najwyżej tyle rund narzędziowych na jedno zapytanie; potem model musi odpowiedzieć bez narzędzi. */
 export const MAX_TOOL_ROUNDS = 8;
@@ -248,7 +253,7 @@ export function createRateLimiter(max: number, windowMs: number, clock: () => nu
 // ───────────────────────── błędy API → komunikaty ─────────────────────────
 
 const GENERIC_ERROR = 'Asystent napotkał nieoczekiwany błąd. Spróbuj ponownie za chwilę.';
-const REFUSAL_MESSAGE = 'Nie mogę pomóc w tej prośbie. Zapytaj o trasę, cień, pogodę albo wodę po drodze w Krakowie.';
+const REFUSAL_MESSAGE = 'Nie mogę pomóc w tej prośbie. Zapytaj o trasę, cień albo pogodę w Krakowie.';
 
 /** Kod HTTP błędu API (ApiError z @google/genai ma pole `status`); undefined dla błędów sieci i innych. */
 function httpStatusOf(err: unknown): number | undefined {
@@ -368,7 +373,7 @@ export async function runAssistant(opts: RunAssistantOptions): Promise<void> {
     if (emittedText) return;
     emit({
       type: 'text',
-      delta: planShown ? 'Trasa jest już na mapie.' : 'Nie udało mi się przygotować odpowiedzi — spróbuj zadać pytanie inaczej.',
+      delta: planShown ? 'Gotowe.' :'Nie udało mi się przygotować odpowiedzi — spróbuj zadać pytanie inaczej.',
     });
   };
 
@@ -437,7 +442,7 @@ export async function runAssistant(opts: RunAssistantOptions): Promise<void> {
     const calls = modelParts.flatMap((part) => (part.functionCall?.name ? [part.functionCall] : []));
     if (calls.length === 0) {
       if (finishReason === 'MAX_TOKENS' && emittedText) {
-        emit({ type: 'text', delta: '\n\n_(Odpowiedź została skrócona.)_' });
+        emit({ type: 'text', delta: '\n\n(Odpowiedź została skrócona.)' });
       } else if (!emittedText && !planShown) {
         // Pusta odpowiedź (brak kandydatów albo sam namysł ucięty limitem tokenów).
         emit({ type: 'error', message: 'Usługa AI nie zwróciła odpowiedzi. Spróbuj ponownie albo zadaj pytanie inaczej.' });

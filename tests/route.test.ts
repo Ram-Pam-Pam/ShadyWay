@@ -1120,3 +1120,38 @@ describe('A* a Dijkstra — dopuszczalność heurystyki we wszystkich trybach', 
     expect(unreachable).toBeLessThan(compared / 2);
   });
 });
+
+describe('v3: krawędzie na mostach', () => {
+  it('ekspozycja krawędzi na moście liczona jest z poziomu pomostu (onBridge), poza mostem — zwykle', () => {
+    // Prosta droga 300 m: środkowe 100 m to most. Scena-atrapa: „pod pomostem" pełny cień, na pomoście słońce.
+    const ways = [
+      way(1, [[1, 0, 0], [2, 100, 0]]),
+      way(2, [[2, 100, 0], [3, 200, 0]], { bridge: true }),
+      way(3, [[3, 200, 0], [4, 300, 0]]),
+    ];
+    const ctx = contextFor(ways, () => 0.5);
+    const calls: boolean[] = [];
+    ctx.scene = {
+      ...ctx.scene,
+      polylineExposure: (coords: number[], sun: SunPosition, _stepM?: number, onBridge?: boolean) => {
+        if (sun.altitude <= 0) return 0;
+        calls.push(onBridge === true);
+        const onDeckSpan = coords[0] >= 100 && coords[coords.length - 2] <= 200;
+        return onDeckSpan ? (onBridge ? 1 : 0) : 0.5;
+      },
+    };
+    const [route] = computeRoutes(ctx, options(at(0, 0), at(300, 0), { shadePreference: 0 }));
+    expectWellFormed(route);
+    expect(calls).toContain(true);
+    expect(calls).toContain(false);
+    // 100 m w pełnym słońcu (most) + 200 m w półcieniu = 200 m „w słońcu" z 300 m.
+    expect(route.sunDistanceM).toBeCloseTo(200, 0);
+    const bridgeSegments = route.segments.filter((segment) => {
+      const [x] = toXY(segment.coords[0][1], segment.coords[0][0]);
+      const [x2] = toXY(segment.coords[segment.coords.length - 1][1], segment.coords[segment.coords.length - 1][0]);
+      return Math.min(x, x2) >= 99 && Math.max(x, x2) <= 201;
+    });
+    expect(bridgeSegments.length).toBeGreaterThan(0);
+    for (const segment of bridgeSegments) expect(segment.sunFraction).toBe(1);
+  });
+});

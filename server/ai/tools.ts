@@ -1,4 +1,4 @@
-// Narzędzia „Asystenta Cienia”: definicje dla modelu, walidacja wejścia i wykonanie po stronie serwera.
+// Narzędzia „Asystenta Canopy”: definicje dla modelu, walidacja wejścia i wykonanie po stronie serwera.
 //
 // Zasady:
 //  - wejście od modelu jest niezaufane — każde pole jest sprawdzane przed użyciem (schemat w deklaracji
@@ -11,9 +11,6 @@ import type {
   AssistantContext,
   AssistantEvent,
   AssistantPlan,
-  ComfortMode,
-  CoolSpot,
-  CoolSpotKind,
   DepartureRequest,
   DepartureResponse,
   LatLon,
@@ -23,10 +20,9 @@ import type {
   RouteResponse,
   RouteResult,
 } from '../../shared/types.ts';
-import type { BBoxLatLon } from '../contracts.ts';
 import { sunInfo } from '../geo/sun.ts';
 import { geocode, GeocoderUnavailableError } from '../geocode.ts';
-import { coolSpotsIn, planDeparture, planRoute, ServiceError } from '../service.ts';
+import { planDeparture, planRoute, ServiceError } from '../service.ts';
 import { getWeather, sunFactorFrom } from '../weather/openmeteo.ts';
 import { formatKrakowClock, formatKrakowLocal, parseAssistantTime, sanitizeLabel, toKrakowIso } from './prompt.ts';
 
@@ -48,20 +44,12 @@ const TIME_DESCRIPTION =
 const MOBILITY_SCHEMA = {
   type: 'string',
   enum: ['default', 'accessible', 'senior'],
-  description: 'Profil poruszania się: accessible = wózek (bez schodów), senior = wolniej, unikaj schodów.',
-} as const;
-const COMFORT_SCHEMA = {
-  type: 'string',
-  enum: ['shade', 'sun', 'auto'],
-  description: 'shade = unikaj słońca, sun = szukaj słońca (zima), auto = wg temperatury odczuwalnej (domyślnie).',
+  description: 'Profil: default = „Pieszo”, accessible = „Bez schodów” (wózek), senior = „Senior” (wolniej, bez schodów).',
 } as const;
 const SHADE_PREFERENCE_SCHEMA = {
   type: 'number',
-  description: '0 = ignoruj słońce (najkrótsza), 1 = maksymalnie unikaj słońca; steruje wariantem „balanced”. Domyślnie 0.5.',
+  description: 'Suwak „Najkrótsza ↔ Najwięcej cienia”: liczba od 0 (najkrótsza) do 1 (najwięcej cienia). Domyślnie 0.5.',
 } as const;
-const COOL_KINDS: readonly CoolSpotKind[] = ['drinking_water', 'fountain', 'water_mist', 'bench', 'park', 'shelter'];
-/** Bez podanych rodzajów szukamy wody i schronienia — ławek jest zbyt wiele, żeby były użyteczną odpowiedzią. */
-const DEFAULT_COOL_KINDS: CoolSpotKind[] = ['drinking_water', 'fountain', 'water_mist', 'shelter'];
 
 /**
  * Definicja narzędzia niezależna od dostawcy modelu. `parameters` to zwykły JSON Schema ograniczony do słów
@@ -82,9 +70,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'geocode_place',
     description:
-      'Wyszukuje miejsce lub adres w Krakowie i zwraca kandydatów ze współrzędnymi. Wywołaj dla każdego miejsca, ' +
-      'które użytkownik nazwał słownie (np. „AGH”, „Wawel”, „dworzec”, „ul. Karmelicka 20”), zanim policzysz trasę. ' +
-      'Nie używaj dla punktów, które masz już ze współrzędnymi w kontekście aplikacji.',
+      'Krok 1. Zamienia nazwę miejsca lub adres w Krakowie na współrzędne (lat, lon). Wywołaj osobno dla każdego miejsca ' +
+      'nazwanego słownie (np. „AGH”, „Wawel”, „dworzec”, „ul. Karmelicka 20”). Nie wywołuj dla punktów, które mają już ' +
+      'współrzędne w kontekście aplikacji (start_A, cel_B, pozycja GPS).',
     parameters: {
       type: 'object',
       properties: { query: { type: 'string', description: 'Nazwa miejsca lub adres, bez dopisku „Kraków”' } },
@@ -94,10 +82,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'plan_route',
     description:
-      'Wyznacza pieszą trasę z A do B dla podanej chwili i zwraca zwarte podsumowanie każdego wariantu ' +
-      '(shortest / balanced / shadiest): długość, czas, udział cienia, metry w słońcu, temperaturę odczuwalną, ' +
-      'światła, schody, punkty chłodu, pierwsze kroki, główne odcinki i ostrzeżenia. Wywołaj zawsze, gdy użytkownik ' +
-      'chce dojść z miejsca do miejsca albo pyta, dlaczego trasa prowadzi tak, a nie inaczej.',
+      'Krok 2. Liczy pieszą trasę z A do B dla podanej chwili i zwraca liczby dla trzech wariantów (shortest, balanced, ' +
+      'shadiest): długość, minuty, procent cienia, światła, schody, temperaturę odczuwalną, główne ulice i ostrzeżenia. ' +
+      'Wywołaj, gdy użytkownik chce dojść z miejsca do miejsca albo pyta o trasę. Samo NIE zmienia mapy — po nim wywołaj control_app.',
     parameters: {
       type: 'object',
       properties: {
@@ -106,11 +93,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         time: { type: 'string', description: TIME_DESCRIPTION },
         shadePreference: SHADE_PREFERENCE_SCHEMA,
         mobility: MOBILITY_SCHEMA,
-        comfort: COMFORT_SCHEMA,
-        viaCoolSpot: {
-          type: 'boolean',
-          description: 'Poprowadź trasę przez punkt z wodą (kran, fontanna), jeśli nadkłada niewiele drogi.',
-        },
       },
       required: ['from', 'to'],
     },
@@ -118,8 +100,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'best_departure',
     description:
-      'Porównuje godziny wyjścia w podanym oknie czasu dla trasy z A do B i wskazuje najlepszą (cień, pogoda, długość). ' +
-      'Wywołaj, gdy użytkownik pyta „kiedy najlepiej wyjść”, ma elastyczną porę albo planuje wyjście w upale.',
+      'Porównuje godziny wyjścia w oknie czasu dla trasy z A do B i wskazuje najlepszą (cień, pogoda, długość). ' +
+      'Wywołaj, gdy użytkownik pyta „kiedy najlepiej wyjść” albo ma elastyczną porę. Samo NIE zmienia aplikacji.',
     parameters: {
       type: 'object',
       properties: {
@@ -130,78 +112,65 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         stepMinutes: { type: 'number', description: 'Krok w minutach, 15–120 (domyślnie 30).' },
         shadePreference: SHADE_PREFERENCE_SCHEMA,
         mobility: MOBILITY_SCHEMA,
-        comfort: COMFORT_SCHEMA,
       },
       required: ['from', 'to'],
     },
   },
   {
-    name: 'find_cool_spots',
-    description:
-      'Szuka punktów chłodu: woda pitna, fontanny, zamgławiacze, ławki, parki, zadaszenia — w pobliżu punktu („near”) ' +
-      'albo w prostokącie („bbox”). Wywołaj, gdy użytkownik pyta o wodę, miejsce na odpoczynek lub ochłodę. ' +
-      'Zna tylko okolice, dla których aplikacja ma już pobrane dane mapy (np. po wyznaczeniu trasy).',
-    parameters: {
-      type: 'object',
-      properties: {
-        near: POINT_SCHEMA,
-        radiusM: { type: 'number', description: 'Promień wokół „near” w metrach, 50–1500 (domyślnie 400).' },
-        bbox: {
-          type: 'object',
-          description: 'Alternatywa dla „near”: prostokąt w stopniach.',
-          properties: {
-            west: { type: 'number' },
-            south: { type: 'number' },
-            east: { type: 'number' },
-            north: { type: 'number' },
-          },
-          required: ['west', 'south', 'east', 'north'],
-        },
-        kinds: {
-          type: 'array',
-          items: { type: 'string', enum: [...COOL_KINDS] },
-          description: 'Rodzaje punktów; domyślnie woda pitna, fontanny, zamgławiacze i zadaszenia.',
-        },
-        time: { type: 'string', description: `Chwila, dla której sprawdzić, czy punkt jest w cieniu. ${TIME_DESCRIPTION}` },
-      },
-    },
-  },
-  {
     name: 'get_conditions',
     description:
-      'Zwraca położenie słońca (wysokość, azymut, wschód i zachód) oraz pogodę w Krakowie dla podanej chwili: ' +
-      'temperaturę, temperaturę odczuwalną, zachmurzenie, promieniowanie i indeks UV. Wywołaj przy pytaniach o upał, ' +
-      'słońce lub pogodę, gdy nie liczysz trasy (plan_route zwraca te dane sam).',
+      'Zwraca położenie słońca (wysokość, wschód i zachód) oraz pogodę w Krakowie dla podanej chwili: temperaturę, ' +
+      'temperaturę odczuwalną, zachmurzenie i indeks UV. Wywołaj przy pytaniach o upał, słońce lub pogodę, gdy nie ' +
+      'liczysz trasy (plan_route zwraca te dane sam).',
     parameters: {
       type: 'object',
       properties: { time: { type: 'string', description: TIME_DESCRIPTION } },
     },
   },
   {
-    name: 'show_on_map',
+    name: 'control_app',
     description:
-      'Pokazuje ustalony plan na mapie użytkownika: ustawia start, cel, godzinę i opcje, przelicza trasę i zaznacza wariant. ' +
-      'Wywołaj za każdym razem, gdy zdecydujesz się na konkretną trasę (po plan_route), z tymi samymi parametrami. ' +
-      'Pola pominięte pozostają w aplikacji bez zmian.',
+      'Krok 3. STERUJE APLIKACJĄ użytkownika — jedyny sposób, żeby cokolwiek zmienić na ekranie. Podaj tylko pola, które ' +
+      'mają się zmienić; pominięte zostają bez zmian. Zmiana from, to, time, shadePreference lub mobility sama przelicza ' +
+      'trasę na mapie. Przykłady: nowa trasa → from, to, time, selectProfile; „prowadź” → startNavigation: true; ' +
+      '„pokaż cienie” → layers: {shadows: true}; „z wózkiem” → mobility: "accessible"; „kiedy wyjść” → openDeparture: true.',
     parameters: {
       type: 'object',
       properties: {
-        from: { ...POINT_SCHEMA, required: ['lat', 'lon', 'label'] },
-        to: { ...POINT_SCHEMA, required: ['lat', 'lon', 'label'] },
-        time: { type: 'string', description: 'Czas krakowski w formacie YYYY-MM-DDTHH:mm.' },
+        from: { ...POINT_SCHEMA, description: 'Nowy start (pole A). Wymaga lat, lon i label.', required: ['lat', 'lon', 'label'] },
+        to: { ...POINT_SCHEMA, description: 'Nowy cel (pole B). Wymaga lat, lon i label.', required: ['lat', 'lon', 'label'] },
+        time: { type: 'string', description: 'Nowa data i godzina wyjścia: czas krakowski w formacie YYYY-MM-DDTHH:mm.' },
         shadePreference: SHADE_PREFERENCE_SCHEMA,
         mobility: MOBILITY_SCHEMA,
-        comfort: COMFORT_SCHEMA,
-        viaCoolSpot: { type: 'boolean' },
         selectProfile: {
           type: 'string',
           enum: ['shortest', 'balanced', 'shadiest'],
-          description: 'Wariant trasy do zaznaczenia.',
+          description: 'Którą kartę trasy zaznaczyć: shortest = najkrótsza, balanced = zbalansowana, shadiest = najbardziej zacieniona.',
+        },
+        startNavigation: {
+          type: 'boolean',
+          description: 'true = uruchom nawigację krok po kroku (przycisk „Nawiguj”) dla zaznaczonej trasy. Wymaga ustawionego startu i celu.',
+        },
+        layers: {
+          type: 'object',
+          description: 'Warstwy mapy: true = włącz, false = wyłącz. Podaj tylko warstwy, które mają się zmienić.',
+          properties: {
+            shadows: { type: 'boolean', description: 'Warstwa „Cienie”.' },
+            heat: { type: 'boolean', description: 'Warstwa „Mapa ciepła”.' },
+            buildings3d: { type: 'boolean', description: 'Warstwa „Budynki 3D”.' },
+          },
+        },
+        openDeparture: {
+          type: 'boolean',
+          description: 'true = otwórz wykres „Kiedy wyjść?” dla bieżącej trasy. Wymaga ustawionego startu i celu.',
         },
       },
     },
   },
 ];
+
+/** Dawna nazwa narzędzia sterującego — przyjmowana zamiennie, gdyby model użył jej z rozpędu. */
+const CONTROL_TOOL_ALIAS = 'show_on_map';
 
 // ───────────────────────── etykiety dla UI ─────────────────────────
 
@@ -218,12 +187,17 @@ export function toolLabel(name: string, input: unknown): string {
       return 'Wyznaczam trasę i liczę cień…';
     case 'best_departure':
       return 'Sprawdzam najlepszą godzinę wyjścia…';
-    case 'find_cool_spots':
-      return 'Szukam wody i miejsc do ochłody…';
     case 'get_conditions':
       return 'Sprawdzam słońce i pogodę…';
-    case 'show_on_map':
-      return 'Pokazuję trasę na mapie…';
+    case 'control_app':
+    case CONTROL_TOOL_ALIAS: {
+      const plan = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+      if (plan.startNavigation === true) return 'Uruchamiam nawigację…';
+      if (plan.from || plan.to) return 'Pokazuję trasę na mapie…';
+      if (plan.openDeparture === true) return 'Otwieram „Kiedy wyjść?”…';
+      if (plan.layers && Object.keys(plan).length === 1) return 'Przełączam warstwy mapy…';
+      return 'Ustawiam aplikację…';
+    }
     default:
       return 'Pracuję…';
   }
@@ -295,7 +269,6 @@ function parseOptionalBoolean(raw: unknown, name: string): boolean | undefined {
 }
 
 const MOBILITY: readonly MobilityProfile[] = ['default', 'accessible', 'senior'];
-const COMFORT: readonly ComfortMode[] = ['shade', 'sun', 'auto'];
 const PROFILES: readonly RouteProfile[] = ['shortest', 'balanced', 'shadiest'];
 
 // ───────────────────────── zwarte podsumowania ─────────────────────────
@@ -303,11 +276,9 @@ const PROFILES: readonly RouteProfile[] = ['shortest', 'balanced', 'shadiest'];
 const MAX_STEPS = 5;
 const MAX_STEP_CHARS = 140;
 const MAX_STREETS = 6;
-const MAX_ROUTE_COOL_SPOTS = 4;
 const MAX_WARNINGS = 5;
 const MAX_WARNING_CHARS = 200;
 const MAX_DEPARTURE_OPTIONS = 16;
-const MAX_COOL_SPOTS = 12;
 const MAX_GEOCODE_RESULTS = 5;
 
 const round = (value: number, digits = 0): number => {
@@ -317,11 +288,6 @@ const round = (value: number, digits = 0): number => {
 const roundOrNull = (value: number | null | undefined, digits = 0): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? round(value, digits) : null;
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
-
-function coolSpotBrief(spot: CoolSpot): Record<string, unknown> {
-  const name = sanitizeLabel(spot.name);
-  return { kind: spot.kind, ...(name ? { name: clip(name, 60) } : {}), ...(spot.shaded !== undefined ? { shaded: spot.shaded } : {}) };
-}
 
 /** Najdłuższe nazwane odcinki trasy z udziałem cienia — materiał do odpowiedzi „dlaczego tędy?”. */
 function mainStreets(route: RouteResult): Array<Record<string, unknown>> {
@@ -341,7 +307,6 @@ function mainStreets(route: RouteResult): Array<Record<string, unknown>> {
 }
 
 function summarizeRoute(route: RouteResult): Record<string, unknown> {
-  const coolSpots = route.coolSpots ?? [];
   const steps = route.steps ?? [];
   const thermal = route.thermal;
   return {
@@ -357,9 +322,6 @@ function summarizeRoute(route: RouteResult): Record<string, unknown> {
     feltMeanC: roundOrNull(thermal?.feltMeanC, 1),
     stress: thermal?.stress ?? null,
     surfaceLstC: roundOrNull(route.meanLstC, 1),
-    coolSpotsNearby: coolSpots.length,
-    coolSpots: coolSpots.slice(0, MAX_ROUTE_COOL_SPOTS).map(coolSpotBrief),
-    ...(route.via ? { via: coolSpotBrief(route.via) } : {}),
     mainStreets: mainStreets(route),
     firstSteps: steps.slice(0, MAX_STEPS).map((step) => clip(step.text, MAX_STEP_CHARS)),
     stepsTotal: steps.length,
@@ -435,7 +397,7 @@ export function summarizeDeparture(response: DepartureResponse): Record<string, 
 export interface ToolContext {
   /** Chwila zapytania („teraz”). */
   now: Date;
-  /** Wysyła zdarzenie do UI (używane przez show_on_map). */
+  /** Wysyła zdarzenie do UI (używane przez control_app). */
   emit: (event: AssistantEvent) => void;
   context?: AssistantContext;
   /** Zgłoszenie nieoczekiwanego wyjątku narzędzia (do logu serwera; model dostaje tylko ogólny komunikat). */
@@ -457,19 +419,6 @@ function serviceErrorOf(err: unknown): { code: string; message: string } | null 
     return { code: String(code), message: err.message };
   }
   return null;
-}
-
-function distanceM(a: LatLon, b: LatLon): number {
-  const k = Math.PI / 180;
-  const x = (b.lon - a.lon) * k * Math.cos(((a.lat + b.lat) / 2) * k);
-  const y = (b.lat - a.lat) * k;
-  return Math.hypot(x, y) * 6371008.8;
-}
-
-function bboxAround(center: LatLon, radiusM: number): BBoxLatLon {
-  const dLat = radiusM / 111320;
-  const dLon = radiusM / (111320 * Math.cos((center.lat * Math.PI) / 180));
-  return { west: center.lon - dLon, south: center.lat - dLat, east: center.lon + dLon, north: center.lat + dLat };
 }
 
 async function runGeocode(input: Raw): Promise<unknown> {
@@ -496,12 +445,8 @@ async function runPlanRoute(input: Raw, ctx: ToolContext): Promise<unknown> {
   };
   const shadePreference = parseOptionalNumber(input.shadePreference, 'shadePreference', 0, 1);
   const mobility = parseOptionalEnum(input.mobility, 'mobility', MOBILITY);
-  const comfort = parseOptionalEnum(input.comfort, 'comfort', COMFORT);
-  const viaCoolSpot = parseOptionalBoolean(input.viaCoolSpot, 'viaCoolSpot');
   if (shadePreference !== undefined) request.shadePreference = shadePreference;
   if (mobility) request.mobility = mobility;
-  if (comfort) request.comfort = comfort;
-  if (viaCoolSpot !== undefined) request.viaCoolSpot = viaCoolSpot;
   // Do serwisu idą same współrzędne — etykieta od modelu nie jest częścią RouteRequest.
   request.from = { lat: request.from.lat, lon: request.from.lon };
   request.to = { lat: request.to.lat, lon: request.to.lon };
@@ -520,56 +465,11 @@ async function runBestDeparture(input: Raw, ctx: ToolContext): Promise<unknown> 
   const stepMinutes = parseOptionalNumber(input.stepMinutes, 'stepMinutes', 15, 120);
   const shadePreference = parseOptionalNumber(input.shadePreference, 'shadePreference', 0, 1);
   const mobility = parseOptionalEnum(input.mobility, 'mobility', MOBILITY);
-  const comfort = parseOptionalEnum(input.comfort, 'comfort', COMFORT);
   if (windowHours !== undefined) request.windowHours = windowHours;
   if (stepMinutes !== undefined) request.stepMinutes = stepMinutes;
   if (shadePreference !== undefined) request.shadePreference = shadePreference;
   if (mobility) request.mobility = mobility;
-  if (comfort) request.comfort = comfort;
   return summarizeDeparture(await planDeparture(request));
-}
-
-async function runFindCoolSpots(input: Raw): Promise<unknown> {
-  const time = parseOptionalTime(input.time, 'time');
-  let kinds: CoolSpotKind[] = DEFAULT_COOL_KINDS;
-  if (input.kinds !== undefined && input.kinds !== null) {
-    if (!Array.isArray(input.kinds) || input.kinds.length === 0 || !input.kinds.every((k) => COOL_KINDS.includes(k as CoolSpotKind))) {
-      throw new ToolInputError(`Pole „kinds” musi być niepustą listą wartości: ${COOL_KINDS.join(', ')}.`);
-    }
-    kinds = [...new Set(input.kinds as CoolSpotKind[])];
-  }
-  let bbox: BBoxLatLon;
-  let center: LatLon;
-  if (input.near !== undefined && input.near !== null) {
-    center = parsePoint(input.near, 'near');
-    bbox = bboxAround(center, parseOptionalNumber(input.radiusM, 'radiusM', 50, 1500) ?? 400);
-  } else if (input.bbox !== undefined && input.bbox !== null) {
-    const raw = asObject(input.bbox, '„bbox”');
-    const { west, south, east, north } = raw;
-    if (![west, south, east, north].every((v) => typeof v === 'number' && Number.isFinite(v))) {
-      throw new ToolInputError('Pole „bbox” wymaga liczb west, south, east, north.');
-    }
-    bbox = { west: west as number, south: south as number, east: east as number, north: north as number };
-    if (bbox.west >= bbox.east || bbox.south >= bbox.north || bbox.east - bbox.west > 0.06 || bbox.north - bbox.south > 0.04) {
-      throw new ToolInputError('Pole „bbox” jest niepoprawne albo za duże (najwyżej ok. 4 × 4 km).');
-    }
-    center = { lat: (bbox.south + bbox.north) / 2, lon: (bbox.west + bbox.east) / 2 };
-    if (!inKrakow(center.lat, center.lon)) throw new ToolInputError('Pole „bbox” leży poza obszarem aplikacji (Kraków).');
-  } else {
-    throw new ToolInputError('Podaj „near” (punkt) albo „bbox” (prostokąt).');
-  }
-  const spots: CoolSpot[] = await coolSpotsIn(bbox, time ? { time, kinds } : { kinds });
-  const ranked = spots
-    .map((spot) => ({ spot, d: distanceM(center, spot) }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, MAX_COOL_SPOTS);
-  return {
-    found: spots.length,
-    spots: ranked.map(({ spot, d }) => ({ ...coolSpotBrief(spot), lat: round(spot.lat, 5), lon: round(spot.lon, 5), distanceM: round(d) })),
-    ...(spots.length === 0
-      ? { note: 'Brak punktów w tej okolicy albo dane mapy dla niej nie są jeszcze pobrane (pobiera je wyznaczenie trasy).' }
-      : {}),
-  };
 }
 
 async function runGetConditions(input: Raw, ctx: ToolContext): Promise<unknown> {
@@ -601,9 +501,38 @@ async function runGetConditions(input: Raw, ctx: ToolContext): Promise<unknown> 
   };
 }
 
-/** Waliduje plan od modelu i zamienia go na AssistantPlan (czas → ISO z offsetem krakowskim). */
-export function parsePlan(raw: unknown): AssistantPlan {
+const LAYER_KEYS = ['shadows', 'heat', 'buildings3d'] as const;
+const PLAN_KEYS = new Set(['from', 'to', 'time', 'shadePreference', 'mobility', 'selectProfile', 'startNavigation', 'layers', 'openDeparture']);
+/** Pola wycofane z interfejsu — model mógł je zapamiętać z historii; pomijamy je po cichu zamiast zgłaszać błąd. */
+const RETIRED_PLAN_KEYS = new Set(['comfort', 'viaCoolSpot']);
+
+function parseLayers(raw: unknown): NonNullable<AssistantPlan['layers']> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const input = asObject(raw, '„layers”');
+  const unknown = Object.keys(input).filter((key) => !(LAYER_KEYS as readonly string[]).includes(key));
+  if (unknown.length > 0) {
+    throw new ToolInputError(`Pole „layers”: nieznana warstwa „${clip(unknown[0], 30)}”. Dostępne: ${LAYER_KEYS.join(', ')}.`);
+  }
+  const layers: NonNullable<AssistantPlan['layers']> = {};
+  for (const key of LAYER_KEYS) {
+    const value = parseOptionalBoolean(input[key], `layers.${key}`);
+    if (value !== undefined) layers[key] = value;
+  }
+  if (Object.keys(layers).length === 0) throw new ToolInputError('Pole „layers” jest puste — podaj np. {"shadows": true}.');
+  return layers;
+}
+
+/**
+ * Waliduje plan od modelu i zamienia go na AssistantPlan (czas → ISO z offsetem krakowskim). `context` to stan
+ * aplikacji z zapytania: nawigacja i wykres „Kiedy wyjść?” wymagają startu i celu — z planu albo z aplikacji.
+ * Plan nie zawiera pól comfort ani viaCoolSpot (tryb rozstrzyga serwer, punkty chłodu zniknęły z interfejsu).
+ */
+export function parsePlan(raw: unknown, context?: AssistantContext): AssistantPlan {
   const input = asObject(raw, 'plan');
+  const unknown = Object.keys(input).filter((key) => !PLAN_KEYS.has(key) && !RETIRED_PLAN_KEYS.has(key));
+  if (unknown.length > 0) {
+    throw new ToolInputError(`Nieznane pole „${clip(unknown[0], 30)}”. Dostępne pola: ${[...PLAN_KEYS].join(', ')}.`);
+  }
   const plan: AssistantPlan = {};
   for (const key of ['from', 'to'] as const) {
     if (input[key] === undefined || input[key] === null) continue;
@@ -617,20 +546,31 @@ export function parsePlan(raw: unknown): AssistantPlan {
   if (shadePreference !== undefined) plan.shadePreference = shadePreference;
   const mobility = parseOptionalEnum(input.mobility, 'mobility', MOBILITY);
   if (mobility) plan.mobility = mobility;
-  const comfort = parseOptionalEnum(input.comfort, 'comfort', COMFORT);
-  if (comfort) plan.comfort = comfort;
-  const viaCoolSpot = parseOptionalBoolean(input.viaCoolSpot, 'viaCoolSpot');
-  if (viaCoolSpot !== undefined) plan.viaCoolSpot = viaCoolSpot;
   const selectProfile = parseOptionalEnum(input.selectProfile, 'selectProfile', PROFILES);
   if (selectProfile) plan.selectProfile = selectProfile;
-  if (Object.keys(plan).length === 0) throw new ToolInputError('Plan jest pusty — podaj przynajmniej jedno pole.');
+  const layers = parseLayers(input.layers);
+  if (layers) plan.layers = layers;
+  // false przy czynnościach jednorazowych nic nie znaczy („nie uruchamiaj”) — do planu trafia tylko true.
+  if (parseOptionalBoolean(input.startNavigation, 'startNavigation')) plan.startNavigation = true;
+  if (parseOptionalBoolean(input.openDeparture, 'openDeparture')) plan.openDeparture = true;
+
+  if (plan.startNavigation || plan.openDeparture) {
+    // Gdy klient nie przysłał stanu aplikacji, nie wiemy, czy trasa istnieje — wtedy nie blokujemy.
+    const missing = (['from', 'to'] as const).filter((key) => !plan[key] && context !== undefined && !context[key]);
+    if (missing.length > 0) {
+      const what = plan.startNavigation ? 'Nawigacja' : 'Wykres „Kiedy wyjść?”';
+      const which = missing.length === 2 ? 'startu (from) i celu (to)' : missing[0] === 'from' ? 'startu (from)' : 'celu (to)';
+      throw new ToolInputError(`${what} wymaga ${which} — w aplikacji tego nie ma. Ustal miejsce i podaj je w tym samym wywołaniu.`);
+    }
+  }
+  if (Object.keys(plan).length === 0) throw new ToolInputError('Plan jest pusty — podaj przynajmniej jedno pole do zmiany.');
   return plan;
 }
 
-function runShowOnMap(input: Raw, ctx: ToolContext): unknown {
-  const plan = parsePlan(input);
+function runControlApp(input: Raw, ctx: ToolContext): unknown {
+  const plan = parsePlan(input, ctx.context);
   ctx.emit({ type: 'plan', plan });
-  return { shown: true, applied: Object.keys(plan) };
+  return { done: true, applied: Object.keys(plan) };
 }
 
 /**
@@ -651,14 +591,12 @@ export async function executeTool(name: string, input: unknown, ctx: ToolContext
       case 'best_departure':
         result = await runBestDeparture(raw, ctx);
         break;
-      case 'find_cool_spots':
-        result = await runFindCoolSpots(raw);
-        break;
       case 'get_conditions':
         result = await runGetConditions(raw, ctx);
         break;
-      case 'show_on_map':
-        result = runShowOnMap(raw, ctx);
+      case 'control_app':
+      case CONTROL_TOOL_ALIAS:
+        result = runControlApp(raw, ctx);
         break;
       default:
         return { content: `Nieznane narzędzie: ${clip(String(name), 60)}.`, isError: true };

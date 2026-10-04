@@ -19,6 +19,14 @@ export interface ParsedTile {
   coolSpots: CoolSpotXY[];
   /** Węzły dróg pieszych z wysokim krawężnikiem (patrz isRaisedKerb). */
   raisedKerbNodeIds: number[];
+  /** v3: obrysy konstrukcji mostowych (man_made=bridge) i bufory dróg/torów z bridge=* (brak w kaflach starszego formatu). */
+  bridgeAreas?: BridgeArea[];
+}
+
+/** Obrys pomostu mostu/wiaduktu/kładki: zamknięty pierścień w metrach lokalnych; id jak dla obszarów (relacje: ujemne). */
+export interface BridgeArea {
+  id: number;
+  ring: number[];
 }
 
 const LEVEL_HEIGHT_M = 3.0;
@@ -644,6 +652,7 @@ export function parseWalkWay(element: OverpassElement, signalNodeIds?: ReadonlyS
 
   const way: WalkWay = { id: element.id, nodeIds, coords, highway: tags.highway, ...cls };
   if (tags.name) way.name = tags.name;
+  if (isBridgeWay(tags)) way.bridge = true;
   Object.assign(way, wayAttributes(tags, cls.kind));
   // Jawne crossing:signals=no na drodze wygrywa z tagami węzła; poza tym wystarczy jedno źródło.
   if (cls.kind === 'crossing' && tags['crossing:signals'] !== 'no') {
@@ -651,6 +660,112 @@ export function parseWalkWay(element: OverpassElement, signalNodeIds?: ReadonlyS
     if (crossingSignals(tags) === true || throughSignalNode) way.signals = true;
   }
   return way;
+}
+
+// ───────────────────────── mosty ─────────────────────────
+
+/** Droga/tor po moście, wiadukcie lub kładce: bridge=* inne niż "no". */
+export function isBridgeWay(tags: Tags): boolean {
+  return tags.bridge !== undefined && tags.bridge !== 'no';
+}
+
+/** Zapas (m) doliczany do połowy szerokości pomostu: balustrady, gzymsy, niedokładność osi w OSM. */
+const BRIDGE_EDGE_MARGIN_M = 1.5;
+const BRIDGE_FOOT_HALF_WIDTH_M = 2;
+const BRIDGE_DEFAULT_HALF_WIDTH_M = 4;
+const BRIDGE_RAIL_HALF_WIDTH_M: Record<string, number> = { tram: 2, light_rail: 2.5, rail: 3, subway: 3, narrow_gauge: 2 };
+const BRIDGE_ROAD_HALF_WIDTH_M: Record<string, number> = { motorway: 7, trunk: 7 };
+const FOOT_HIGHWAYS = new Set(['footway', 'path', 'cycleway', 'steps', 'pedestrian', 'bridleway', 'track']);
+
+/** Połowa szerokości pomostu (m, z zapasem) dla drogi/toru z bridge=*: width → lanes → wartość typowa dla klasy. */
+export function bridgeHalfWidthM(tags: Tags): number {
+  let half: number;
+  const width = parseMetres(tags.width);
+  const lanes = parseCount(tags.lanes);
+  const highway = tags.highway;
+  const roadClass = highway?.endsWith('_link') ? highway.slice(0, -'_link'.length) : highway;
+  if (width !== null && width > 0) half = width / 2;
+  else if (highway !== undefined && FOOT_HIGHWAYS.has(highway)) half = BRIDGE_FOOT_HALF_WIDTH_M;
+  else if (lanes !== null && lanes > 0) half = (lanes * LANE_WIDTH_M) / 2 + KERB_TO_WALKER_M;
+  else if (roadClass !== undefined && BRIDGE_ROAD_HALF_WIDTH_M[roadClass] !== undefined) half = BRIDGE_ROAD_HALF_WIDTH_M[roadClass];
+  else if (roadClass !== undefined && ROAD_CLASSES[roadClass] !== undefined) half = ROAD_CLASSES[roadClass].offset;
+  else if (tags.railway !== undefined) half = BRIDGE_RAIL_HALF_WIDTH_M[tags.railway] ?? 3;
+  else half = BRIDGE_DEFAULT_HALF_WIDTH_M;
+  return round2(clamp(half, 1, 20) + BRIDGE_EDGE_MARGIN_M);
+}
+
+/**
+ * Bufor polilinii jako jeden zamknięty pierścień: lewa krawędź w przód, prawa wstecz; końce ucięte płasko
+ * (dojazd do mostu nie należy już do pomostu), w wierzchołkach złącze ukośne ograniczone do 2 × połowa szerokości.
+ */
+export function bufferLine(line: number[], halfWidthM: number): number[] | null {
+  const n = line.length >> 1;
+  if (n < 2 || !(halfWidthM > 0)) return null;
+  const left: number[] = [];
+  const right: number[] = [];
+  for (let i = 0; i < n; i++) {
+    // Kierunki odcinków przed i za wierzchołkiem (na końcach — jedyny dostępny).
+    let ax = 0;
+    let ay = 0;
+    let bx = 0;
+    let by = 0;
+    if (i > 0) {
+      ax = line[2 * i] - line[2 * i - 2];
+      ay = line[2 * i + 1] - line[2 * i - 1];
+      const length = Math.hypot(ax, ay) || 1;
+      ax /= length;
+      ay /= length;
+    }
+    if (i < n - 1) {
+      bx = line[2 * i + 2] - line[2 * i];
+      by = line[2 * i + 3] - line[2 * i + 1];
+      const length = Math.hypot(bx, by) || 1;
+      bx /= length;
+      by /= length;
+    }
+    if (i === 0) {
+      ax = bx;
+      ay = by;
+    }
+    if (i === n - 1) {
+      bx = ax;
+      by = ay;
+    }
+    // Normalna (w lewo) uśredniona z obu odcinków, wydłużona tak, by krawędzie były równoległe do osi.
+    let nx = -(ay + by);
+    let ny = ax + bx;
+    const norm = Math.hypot(nx, ny);
+    if (norm < 1e-6) {
+      nx = -ay;
+      ny = ax;
+    } else {
+      nx /= norm;
+      ny /= norm;
+    }
+    const cos = nx * -ay + ny * ax;
+    const scale = halfWidthM * Math.min(2, 1 / Math.max(cos, 1e-3));
+    left.push(round2(line[2 * i] + nx * scale), round2(line[2 * i + 1] + ny * scale));
+    right.push(round2(line[2 * i] - nx * scale), round2(line[2 * i + 1] - ny * scale));
+  }
+  const ring = left.slice();
+  for (let i = n - 1; i >= 0; i--) ring.push(right[2 * i], right[2 * i + 1]);
+  ring.push(ring[0], ring[1]);
+  return ring;
+}
+
+/**
+ * Obrysy pomostów z elementu OSM: obszar man_made=bridge (droga zamknięta lub multipolygon) wprost,
+ * a droga/tor z bridge=* jako bufor osi o szerokości pomostu. Służą do wycięcia mostów z rastra roślinności LiDAR
+ * (pomost jest w NMPT, a nie ma go w NMT — bez tego wyglądałby jak 10–20-metrowe „drzewa").
+ */
+export function parseBridgeAreas(element: OverpassElement): BridgeArea[] {
+  const tags = element.tags ?? {};
+  if (tags.man_made === 'bridge') return areaRings(element).map(({ id, ring }) => ({ id, ring }));
+  if (element.type !== 'way' || !element.geometry || !isBridgeWay(tags)) return [];
+  if (tags.highway === undefined && tags.railway === undefined) return [];
+  if (tags.highway === 'proposed' || tags.highway === 'construction' || tags.railway === 'proposed') return [];
+  const ring = bufferLine(projectLine(element.geometry), bridgeHalfWidthM(tags));
+  return ring ? [{ id: element.id, ring }] : [];
 }
 
 // ───────────────────────── krawężniki ─────────────────────────
@@ -839,6 +954,7 @@ export function parseOverpass(elements: OverpassElement[]): ParsedTile {
   const coolSpots = new Map<string, CoolSpotXY>();
   const signalNodeIds = new Set<number>();
   const raisedKerbs = new Set<number>();
+  const bridgeAreas = new Map<number, BridgeArea>();
 
   // Węzły przychodzą w odpowiedzi po drogach, a drogi potrzebują wiedzy o sygnalizacji w węzłach — stąd osobny przebieg.
   for (const element of elements) {
@@ -856,6 +972,7 @@ export function parseOverpass(elements: OverpassElement[]): ParsedTile {
     for (const b of parseBuildings(element)) buildings.set(b.id, b);
     for (const c of parseCanopies(element)) canopies.set(c.id, c);
     for (const t of parseTrees(element)) trees.set(t.id, t);
+    for (const b of parseBridgeAreas(element)) bridgeAreas.set(b.id, b);
     if (tags.highway) {
       const way = parseWalkWay(element, signalNodeIds);
       if (way) ways.set(way.id, way);
@@ -877,5 +994,6 @@ export function parseOverpass(elements: OverpassElement[]): ParsedTile {
     blockedNodeIds: [...blockedNodeIds],
     coolSpots: [...coolSpots.values()],
     raisedKerbNodeIds,
+    bridgeAreas: [...bridgeAreas.values()],
   };
 }

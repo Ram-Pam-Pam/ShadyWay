@@ -2,9 +2,10 @@
 // Nowe funkcje (asystent AI, nawigacja krok po kroku, PWA) dopinają się przez ten interfejs,
 // zamiast rozbudowywać main.ts — wzór: `export function installX(app: App): void`.
 
-import type { AssistantPlan, LatLon, RouteProfile } from '../../shared/types.ts';
+import type { LatLon, RouteProfile } from '../../shared/types.ts';
 import type { MapView } from './map.ts';
-import type { AppState, EndpointKey, Place, Store } from './store.ts';
+import type { PlanPatch } from './plan.ts';
+import type { AppState, EndpointKey, LayerToggles, Place, Store } from './store.ts';
 import type { RouteList } from './ui/routeList.ts';
 import type { Sheet } from './ui/sheet.ts';
 import type { PanelTabs } from './ui/tabs.ts';
@@ -19,8 +20,12 @@ export interface AppActions {
   selectProfile(profile: RouteProfile): void;
   /** Ustawia moment wyjścia (ISO) i wyłącza tryb „Teraz”. */
   setDepartureTime(iso: string): void;
-  /** Stosuje plan asystenta AI: ustawia podane pola i przelicza trasę. */
-  applyPlan(plan: AssistantPlan): void;
+  /** Ustawia pola trasy z planu asystenta AI (punkty, czas, profil, preferencja); trasa przelicza się sama. */
+  applyPlanRouting(patch: PlanPatch): void;
+  /** Przełącza warstwy mapy; zwraca te, które faktycznie ustawiono (niedostępne są pomijane). */
+  setLayers(layers: Partial<LayerToggles>): Partial<LayerToggles>;
+  /** Rozwija wykres „Kiedy wyjść?” w zakładce „Trasa”. */
+  openDeparture(): void;
   /** Wyznacza trasę ponownie dla bieżących ustawień (np. po odzyskaniu połączenia). */
   refreshRoute(): void;
 }

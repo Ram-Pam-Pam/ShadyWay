@@ -7,8 +7,14 @@ import type { AreaData, Building, HeightRaster } from '../server/contracts.ts';
 import { toXY } from '../server/geo/project.ts';
 import {
   applyLidarHeights,
+  canopyEvidence,
+  CROWN_BASE_UNIT_M,
+  crownBaseM,
+  detectDecks,
   dilateMask,
   footprintSamples,
+  isCanopyContaminated,
+  vegetationLayers,
   percentile,
   rasterizeFootprints,
   removeSpecks,
@@ -876,5 +882,231 @@ describe('magazyn kafli LiDAR', () => {
     expect(lidar.vegetation!.data[0]).toBe(0);
     expect(lidar.terrain!.data[lidar.terrain!.cols - 1]).toBeNaN();
     expect(area.buildings[0].heightSource).toBe('lidar');
+  });
+});
+
+// ═════════════════════════ v3: analiza wysokości drzew, mosty, budynki pod koronami ═════════════════════════
+
+/** Deterministyczny „szum" 0..1 z pozycji komórki — chropowata powierzchnia koron. */
+const noise = (x: number, y: number): number => {
+  const v = Math.sin(Math.floor(x) * 12.9898 + Math.floor(y) * 78.233) * 43758.5453;
+  return v - Math.floor(v);
+};
+
+describe('v3: pomosty mostów w nDSM', () => {
+  const deckRect: [number, number, number, number] = [20, 10, 28, 90];
+  const ring = rect(...deckRect);
+
+  it('gładki pomost w obrysie mostu jest wykrywany i wycinany z roślinności', () => {
+    // Pomost 8 m nad terenem (z latarnią 12 m) + drzewo 15 m obok mostu.
+    const ndsm = raster(100, 100, (x, y) => {
+      if (inRect(x, y, [24, 50, 25, 51])) return 12;
+      if (inRect(x, y, deckRect)) return 8 + 0.01 * y;
+      if (inRect(x, y, [60, 40, 70, 50])) return 13 + 4 * noise(x, y);
+      return 0.2;
+    });
+    const terrain = raster(10, 10, () => 200, 10);
+    const { mask, decks } = detectDecks(ndsm, [ring], terrain);
+    expect(decks).toHaveLength(1);
+    expect(decks[0].ring).toBe(ring);
+    expect(decks[0].heightM).toBeGreaterThan(8);
+    expect(decks[0].heightM).toBeLessThan(9);
+    expect(decks[0].topZ).toBeCloseTo(200 + decks[0].heightM, 1);
+    expect(mask[50 * 100 + 24]).toBe(1);
+    expect(mask[45 * 100 + 65]).toBe(0);
+
+    const before = vegetationRaster(ndsm, []);
+    const after = vegetationLayers(ndsm, [], { exclude: mask }).top;
+    const at = (v: HeightRaster, x: number, y: number): number => v.data[Math.floor(y / 2) * v.cols + Math.floor(x / 2)];
+    expect(at(before, 24, 30)).toBeGreaterThan(8); // defekt: most jako „korony"
+    expect(at(after, 24, 30)).toBe(0);
+    expect(at(after, 24, 50)).toBe(0);
+    expect(at(after, 65, 45)).toBeGreaterThan(13); // drzewo obok zostaje
+  });
+
+  it('niska kładka pod koronami drzew nie jest pomostem (korony zostają), pusty obrys też nie', () => {
+    const canopy = raster(100, 100, (x, y) => (inRect(x, y, [10, 0, 40, 100]) ? 9 + 8 * noise(x, y) : 0.3));
+    expect(detectDecks(canopy, [ring]).decks).toHaveLength(0);
+    const flat = raster(100, 100, () => 0.4);
+    const none = detectDecks(flat, [ring]);
+    expect(none.decks).toHaveLength(0);
+    expect(none.mask.some((v) => v === 1)).toBe(false);
+    // Obrys poza rastrem jest pomijany.
+    expect(detectDecks(flat, [rect(500, 500, 510, 600)]).decks).toHaveLength(0);
+  });
+});
+
+describe('v3: dolna granica koron z nDSM', () => {
+  const baseAt = (layers: { top: HeightRaster; crownBase: Uint8Array }, x: number, y: number): number =>
+    layers.crownBase[Math.floor(y / 2) * layers.top.cols + Math.floor(x / 2)] * CROWN_BASE_UNIT_M;
+
+  it('reguła: krzewy od 0,8 m; drzewo wg rąbka w granicach 0,2–0,4 H; zwarty drzewostan 0,3 H; minimalna grubość', () => {
+    expect(crownBaseM(3, 3, Infinity)).toBeCloseTo(0.8, 5);
+    expect(crownBaseM(4, 4.5, 3)).toBeCloseTo(0.8, 5);
+    // Drzewo 20 m: strome brzegi korony (rąbek 14 m) → 0,4 H; nisko zwieszona korona (rąbek 4 m) → 0,2 H.
+    expect(crownBaseM(20, 20, 14)).toBeCloseTo(8, 5);
+    expect(crownBaseM(20, 20, 4)).toBeCloseTo(4, 5);
+    expect(crownBaseM(20, 20, 10)).toBeCloseTo(6, 5);
+    expect(crownBaseM(20, 20, Infinity)).toBeCloseTo(6, 5);
+    // Niskie drzewo: podstawa nie schodzi poniżej 2 m.
+    expect(crownBaseM(6, 6, 3)).toBeCloseTo(2, 5);
+    // Komórka na brzegu korony wysokiego drzewa (szczyt 8 m): warstwa ma co najmniej 45% wysokości komórki.
+    expect(crownBaseM(8, 20, 14)).toBeCloseTo(4.4, 5);
+  });
+
+  it('raster: żywopłot nisko, wysokie drzewo alejowe wysoko — także w komórkach na brzegu korony', () => {
+    // Żywopłot 3 m (4 × 30 m), drzewo alejowe: rdzeń 20 m o stromych brzegach (brzeg 12 m).
+    const ndsm = raster(120, 80, (x, y) => {
+      if (inRect(x, y, [10, 20, 14, 50])) return 3;
+      if (inRect(x, y, [62, 32, 74, 44])) return 20;
+      if (inRect(x, y, [60, 30, 76, 46])) return 12;
+      return 0.1;
+    });
+    const layers = vegetationLayers(ndsm, []);
+    expect(layers.crownBase).toHaveLength(layers.top.data.length);
+    expect(baseAt(layers, 12, 35)).toBeCloseTo(0.8, 5);
+    // Rąbek = 12 m → 0,6 · 12 = 7,2 m (mieści się w 0,2–0,4 · 20 m).
+    expect(baseAt(layers, 63, 38)).toBeCloseTo(7.2, 1);
+    // Środek korony, z którego nie widać brzegu (dalej niż 4 m): wartość typowa 0,3 H.
+    expect(baseAt(layers, 68, 38)).toBeCloseTo(6, 1);
+    // Komórka brzegowa (szczyt 12 m): min(7,2; 12 − 5,4) = 6,6 m — dawna reguła dawała 4,2 m.
+    expect(baseAt(layers, 61, 38)).toBeCloseTo(6.6, 1);
+    expect(baseAt(layers, 61, 38)).toBeGreaterThan(Math.max(2, 0.35 * 12));
+    // Poza roślinnością brak wartości.
+    expect(baseAt(layers, 100, 10)).toBe(0);
+    // vegetationRaster zwraca ten sam raster szczytów.
+    expect(Array.from(vegetationRaster(ndsm, []).data)).toEqual(Array.from(layers.top.data));
+  });
+});
+
+describe('v3: małe budynki pod koronami drzew', () => {
+  const kiosk = rect(40, 40, 48, 48);
+  /** Korony 12–20 m wszędzie poza prześwitami; `roof` — co widać w obrysie kiosku. */
+  const under = (roof: (x: number, y: number) => number): HeightRaster =>
+    raster(90, 90, (x, y) => (inRect(x, y, [40, 40, 48, 48]) ? roof(x, y) : 12 + 8 * noise(x, y)));
+
+  it('kiosk całkowicie przykryty koroną zachowuje wysokość z OSM', () => {
+    const b = building(1, kiosk, { height: 3 });
+    const ndsm = under((x, y) => 12 + 8 * noise(x + 7, y + 3));
+    const samples = footprintSamples(b, ndsm, 1, { built: rasterizeFootprints([b], ndsm) });
+    const evidence = canopyEvidence(samples)!;
+    expect(evidence.ringFraction).toBe(1);
+    expect(evidence.roughnessM).toBeGreaterThan(0.6);
+    expect(isCanopyContaminated(samples, 17)).toBe(true);
+    expect(applyLidarHeights([b], ndsm)).toBe(0);
+    expect(b.height).toBe(3);
+    expect(b.heightSource).toBeUndefined();
+  });
+
+  it('prześwity w koronie odsłaniają niski dach → wysokość z niskiego percentyla', () => {
+    const b = building(1, kiosk, { height: 10 });
+    // 30% obrysu to widoczny dach 3 m, reszta korona.
+    const ndsm = under((x, y) => (noise(x + 1, y + 5) < 0.3 ? 3 : 12 + 8 * noise(x, y)));
+    expect(applyLidarHeights([b], ndsm)).toBe(1);
+    expect(b.height).toBeCloseTo(3, 1);
+    expect(b.heightSource).toBe('lidar');
+  });
+
+  it('prawdziwe wysokie obiekty nie są odrzucane: płaski dach wśród drzew, wieża, duży budynek', () => {
+    const flat = building(1, kiosk, { height: 3 });
+    expect(applyLidarHeights([flat], under(() => 9))).toBe(1);
+    expect(flat.height).toBeCloseTo(9, 1);
+
+    // Wieża 60 m (ponad zasięg drzew) o nierównym szczycie.
+    const tower = building(2, kiosk, { height: 10 });
+    expect(applyLidarHeights([tower], under((x, y) => 55 + 6 * noise(x, y)))).toBe(1);
+    expect(tower.height).toBeGreaterThan(55);
+
+    // Duży budynek (30 × 30 m) o chropowatym dachu wśród drzew — rozmiar wyklucza „skażenie".
+    const big = building(3, rect(30, 30, 60, 60), { height: 10 });
+    const ndsm = raster(90, 90, (x, y) => 12 + 8 * noise(x, y));
+    expect(applyLidarHeights([big], ndsm)).toBe(1);
+    expect(big.height).toBeGreaterThan(12);
+  });
+
+  it('sąsiednie budynki nie liczą się jako „roślinność wokół": kamienica w pierzei dostaje wysokość z LiDAR-u', () => {
+    // Mały dom o spadzistym dachu 12–18 m wciśnięty między wyższe budynki (zwarta zabudowa, zero drzew).
+    const house = building(1, kiosk, { height: 10 });
+    const neighbours = [building(2, rect(20, 40, 40, 48)), building(3, rect(48, 40, 70, 48)), building(4, rect(20, 48, 70, 70))];
+    const ndsm = raster(90, 90, (x, y) => {
+      if (inRect(x, y, [40, 40, 48, 48])) return 12 + 1.5 * Math.abs(x - 44);
+      if (inRect(x, y, [20, 40, 70, 70])) return 20 + 6 * noise(x, y);
+      return 0.2;
+    });
+    expect(applyLidarHeights([house, ...neighbours], ndsm)).toBe(4);
+    expect(house.height).toBeGreaterThan(12);
+  });
+});
+
+describe('v3: magazyn LiDAR — mosty i dolne granice koron w area.lidar', () => {
+  const tile: TileIndex = { ix: 664, iy: 2503 };
+  const grid = tileNdsmGrid(tile);
+  const deckRect: [number, number, number, number] = [grid.x0 + 500, grid.y0 + 400, grid.x0 + 510, grid.y0 + 520];
+  const treeRect: [number, number, number, number] = [grid.x0 + 560, grid.y0 + 400, grid.x0 + 572, grid.y0 + 412];
+
+  function tileWith(objects: { rect: [number, number, number, number]; height: number }[]): LidarTile {
+    const ndsmGrid = tileNdsmGrid(tile);
+    const terrainGrid = tileTerrainGrid(tile);
+    const ndsm = new Uint16Array(ndsmGrid.cols * ndsmGrid.rows);
+    for (const object of objects) {
+      for (let y = Math.floor(object.rect[1]); y < object.rect[3]; y++) {
+        for (let x = Math.floor(object.rect[0]); x < object.rect[2]; x++) {
+          ndsm[(y - ndsmGrid.y0) * ndsmGrid.cols + (x - ndsmGrid.x0)] = object.height * 10;
+        }
+      }
+    }
+    const terrain = new Uint16Array(terrainGrid.cols * terrainGrid.rows).fill(2000);
+    return { key: tileKey(tile), fetchedAt: '2026-10-04T00:00:00.000Z', ndsmGrid, ndsm, terrainGrid, terrain };
+  }
+
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'cien-lidar-v3-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('most z bridgeAreas znika z roślinności i trafia do decks; obszar bez mostów (stary kafel OSM) działa jak dawniej', async () => {
+    const store = createLidarStore({
+      dir,
+      fetchTile: async () =>
+        tileWith([
+          { rect: deckRect, height: 9 },
+          { rect: treeRect, height: 16 },
+        ]),
+      tileEstimateMs: 10,
+    });
+    const base = { key: tileKey(tile), bboxXY: tileRectXY(tile), buildings: [], trees: [], canopies: [], ways: [], blockedNodeIds: [] };
+    const vegAt = (area: AreaData, x: number, y: number): number => {
+      const veg = area.lidar!.vegetation!;
+      return veg.data[Math.floor((y - veg.y0) / 2) * veg.cols + Math.floor((x - veg.x0) / 2)];
+    };
+
+    const withoutBridges: AreaData = { ...base };
+    await store.attachLidar(withoutBridges);
+    expect(vegAt(withoutBridges, deckRect[0] + 5, deckRect[1] + 60)).toBeCloseTo(9, 1);
+    expect(withoutBridges.lidar!.decks).toEqual([]);
+
+    const ring = rect(deckRect[0] - 1, deckRect[1], deckRect[2] + 1, deckRect[3]);
+    const withBridges: AreaData = { ...base, bridgeAreas: [ring] };
+    await store.attachLidar(withBridges, { cachedOnly: true });
+    const lidar = withBridges.lidar!;
+    expect(vegAt(withBridges, deckRect[0] + 5, deckRect[1] + 60)).toBe(0);
+    expect(vegAt(withBridges, treeRect[0] + 6, treeRect[1] + 6)).toBeCloseTo(16, 1);
+    expect(lidar.decks).toHaveLength(1);
+    expect(lidar.decks![0].ring).toBe(ring);
+    expect(lidar.decks![0].heightM).toBeCloseTo(9, 1);
+    expect(lidar.decks![0].topZ).toBeCloseTo(209, 1);
+
+    // Dolna granica koron: ta sama siatka co roślinność; pod drzewem 16 m o stromych brzegach = 0,4 H.
+    const veg = lidar.vegetation!;
+    expect(lidar.crownBase).toHaveLength(veg.data.length);
+    const i = Math.floor((treeRect[1] + 6 - veg.y0) / 2) * veg.cols + Math.floor((treeRect[0] + 6 - veg.x0) / 2);
+    expect(lidar.crownBase![i] * CROWN_BASE_UNIT_M).toBeCloseTo(6.4, 1);
+
+    // Idempotencja także z mostami.
+    await store.attachLidar(withBridges, { cachedOnly: true });
+    expect(withBridges.lidar).toBe(lidar);
   });
 });

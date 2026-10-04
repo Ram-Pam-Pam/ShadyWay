@@ -353,3 +353,13 @@ export interface RouteOptions {
 }
 
 export type { CoolSpot, CoolSpotKind, DepartureRequest, DepartureResponse, MobilityProfile, RouteRequest, RouteResponse };
+
+// ───────────── v3 ─────────────
+export interface WalkWay {
+  /** Droga biegnie po moście/wiadukcie/kładce (bridge=* poza "no"). */
+  bridge?: boolean;
+}
+export interface AreaData {
+  /** Obrysy konstrukcji mostowych (man_made=bridge) i bufory dróg z bridge=* — do wycięcia z rastra roślinności LiDAR. */
+  bridgeAreas?: number[][];
+}

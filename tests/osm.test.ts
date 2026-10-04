@@ -22,6 +22,9 @@ import {
   isEvergreen,
   isRaisedKerb,
   isSignalNode,
+  bridgeHalfWidthM,
+  bufferLine,
+  parseBridgeAreas,
   parseBuildings,
   parseCoolSpot,
   parseInclinePct,
@@ -43,6 +46,7 @@ import {
   MAX_TILES_FETCHED_PER_CALL,
   mergeTiles,
   OutOfAreaError,
+  TILE_FORMAT_VERSION,
   tileAt,
   tileBBox,
   tileKey,
@@ -411,7 +415,7 @@ describe('siatka kafli', () => {
     expect(query).toContain('node["amenity"~"^(drinking_water|water_point|fountain|bench|shelter)$"]');
     expect(query).toContain('node["man_made"~"^(water_tap|drinking_fountain)$"]');
     expect(query).toContain('way["leisure"~"^(park|garden)$"]');
-    expect(query).toMatch(/relation\["leisure"~"\^\(park\|garden\)\$"\];\);\nout body geom qt;/);
+    expect(query).toMatch(/relation\["leisure"~"\^\(park\|garden\)\$"\];.*\);\nout body geom qt;/);
   });
 });
 
@@ -880,7 +884,7 @@ describe('klient Overpass', () => {
         hits.push(url);
         expect(init.method).toBe('POST');
         expect(String(init.body)).toMatch(/^data=/);
-        expect((init.headers as Record<string, string>)['User-Agent']).toMatch(/Cien/);
+        expect((init.headers as Record<string, string>)['User-Agent']).toMatch(/Canopy/);
         return url.startsWith('https://a.') ? ok('<html>429</html>', 429) : ok('{"elements":[{"type":"node","id":1}]}');
       }) as typeof fetch,
     });
@@ -994,5 +998,152 @@ describe('obszar routingu a limit kafli', () => {
     const failing = new Promise<string>((_resolve, reject) => setTimeout(() => reject(new Error('sieć')), 30));
     await expect(withinBudget(failing, 5)).rejects.toThrow(/trwa dłużej niż zwykle/);
     await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+});
+
+describe('v3: mosty', () => {
+  const geometry = [
+    { lat: 50.054, lon: 19.928 },
+    { lat: 50.0545, lon: 19.928 },
+    { lat: 50.055, lon: 19.928 },
+  ];
+  const bridgeWay = (id: number, tags: Record<string, string>): OverpassElement => ({ type: 'way', id, nodes: [1, 2, 3], geometry, tags });
+
+  it('WalkWay.bridge: bridge=* poza "no"', () => {
+    expect(parseWalkWay(bridgeWay(1, { highway: 'footway', bridge: 'yes' }))?.bridge).toBe(true);
+    expect(parseWalkWay(bridgeWay(2, { highway: 'footway', bridge: 'viaduct' }))?.bridge).toBe(true);
+    expect(parseWalkWay(bridgeWay(3, { highway: 'footway', bridge: 'no' }))?.bridge).toBeUndefined();
+    expect(parseWalkWay(bridgeWay(4, { highway: 'footway' }))?.bridge).toBeUndefined();
+  });
+
+  it('bufor osi: pierścień o szerokości 2 × połowa, końce ucięte płasko', () => {
+    const ring = bufferLine([0, 0, 0, 50, 0, 100], 4)!;
+    expect(ring).toEqual([-4, 0, -4, 50, -4, 100, 4, 100, 4, 50, 4, 0, -4, 0]);
+    // Zakręt 90°: złącze ukośne (narożnik odsunięty o połowę szerokości w obu osiach).
+    const bent = bufferLine([0, 0, 0, 50, 50, 50], 4)!;
+    expect(bent.slice(2, 4)).toEqual([-4, 54]);
+    expect(bufferLine([0, 0], 4)).toBeNull();
+  });
+
+  it('szerokość pomostu: width → klasa drogi → tor; kładka wąska', () => {
+    expect(bridgeHalfWidthM({ highway: 'footway', bridge: 'yes' })).toBe(3.5);
+    expect(bridgeHalfWidthM({ highway: 'primary', bridge: 'yes' })).toBe(9.5);
+    expect(bridgeHalfWidthM({ highway: 'primary', bridge: 'yes', width: '12' })).toBe(7.5);
+    expect(bridgeHalfWidthM({ railway: 'tram', bridge: 'yes' })).toBe(3.5);
+  });
+
+  it('parseBridgeAreas: droga i tor z bridge=* jako bufor, man_made=bridge jako obrys', () => {
+    const footbridge = parseBridgeAreas(bridgeWay(10, { highway: 'footway', bridge: 'yes' }));
+    expect(footbridge).toHaveLength(1);
+    const xs = footbridge[0].ring.filter((_, i) => i % 2 === 0);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(7, 1);
+    expect(parseBridgeAreas(bridgeWay(11, { railway: 'rail', bridge: 'yes' }))).toHaveLength(1);
+    expect(parseBridgeAreas(bridgeWay(12, { highway: 'footway' }))).toHaveLength(0);
+    expect(parseBridgeAreas(bridgeWay(13, { waterway: 'canal', bridge: 'aqueduct' }))).toHaveLength(0);
+    const outline: OverpassElement = {
+      type: 'way',
+      id: 14,
+      tags: { man_made: 'bridge' },
+      geometry: [
+        { lat: 50.054, lon: 19.928 },
+        { lat: 50.054, lon: 19.9283 },
+        { lat: 50.055, lon: 19.9283 },
+        { lat: 50.055, lon: 19.928 },
+        { lat: 50.054, lon: 19.928 },
+      ],
+    };
+    const area = parseBridgeAreas(outline);
+    expect(area).toHaveLength(1);
+    expect(area[0].ring).toHaveLength(10);
+  });
+
+  it('parseOverpass i mergeTiles: bridgeAreas trafiają do AreaData bez powtórzeń; zapytanie pobiera mosty', () => {
+    const tile = parseOverpass([bridgeWay(20, { highway: 'footway', bridge: 'yes' }), bridgeWay(21, { highway: 'footway' })]);
+    expect(tile.bridgeAreas).toHaveLength(1);
+    expect(tile.ways.map((w) => w.bridge)).toEqual([true, undefined]);
+    const area = mergeTiles('k', [0, 0, 1, 1], [tile, tile]);
+    expect(area.bridgeAreas).toHaveLength(1);
+    // Kafel bez pola (starszy format) nie psuje scalania.
+    const old = { ...tile, bridgeAreas: undefined };
+    expect(mergeTiles('k', [0, 0, 1, 1], [old]).bridgeAreas).toEqual([]);
+    const query = buildTileQuery({ west: 19.92, south: 50.06, east: 19.95, north: 50.08 });
+    expect(query).toContain('way["bridge"]["bridge"!="no"]["highway"]');
+    expect(query).toContain('way["man_made"="bridge"]');
+    expect(query).toContain('relation["man_made"="bridge"]');
+  });
+});
+
+describe('v3: kafle w starszym formacie są używane i odświeżane w tle', () => {
+  let dir: string;
+  const one: BBoxLatLon = { west: 19.93, south: 50.061, east: 19.94, north: 50.065 };
+  const index = { ix: 664, iy: 2503 };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'cien-osm-v3-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeOldTile(): Promise<ParsedTile> {
+    const tile = parseOverpass(await fixture('overpass-tile-a.json'));
+    const old = { ...tile, bridgeAreas: undefined };
+    const file = { v: TILE_FORMAT_VERSION - 1, key: '664_2503', fetchedAt: '2026-01-01T00:00:00Z', tile: old };
+    await writeFile(path.join(dir, '664_2503.json.gz'), gzipSync(JSON.stringify(file)));
+    return tile;
+  }
+
+  it('Overpass nie działa: stary kafel nadal wczytuje się (bez mostów) i routing nie staje', async () => {
+    const tile = await writeOldTile();
+    let calls = 0;
+    const store = createOsmStore({
+      dir,
+      fetchTile: async () => {
+        calls++;
+        throw new Error('sieć niedostępna');
+      },
+    });
+    expect(await store.hasTileOnDisk(index)).toBe(false); // prefetch pobierze go od nowa
+    const cachedOnly = await store.loadArea(one, { cachedOnly: true });
+    expect(cachedOnly.key).toBe('664_2503');
+    expect(calls).toBe(0);
+    const area = await store.loadArea(one);
+    expect(area.ways).toHaveLength(tile.ways.length);
+    expect(area.bridgeAreas).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(1); // jedna próba odświeżenia w tle
+    // Po nieudanej próbie nie ponawiamy od razu, a dane dalej są dostępne.
+    expect((await store.loadArea(one)).key).toBe('664_2503');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(1);
+    await expect(store.ensureTile(index)).rejects.toBeInstanceOf(DataUnavailableError);
+  });
+
+  it('udane odświeżenie w tle podmienia kafel i unieważnia scalony obszar', async () => {
+    const tile = await writeOldTile();
+    const fresh: ParsedTile = { ...tile, bridgeAreas: [{ id: 99, ring: [0, 0, 10, 0, 10, 10, 0, 10, 0, 0] }] };
+    let calls = 0;
+    const store = createOsmStore({
+      dir,
+      fetchTile: async () => {
+        calls++;
+        return fresh;
+      },
+    });
+    const before = await store.loadArea(one);
+    expect(before.bridgeAreas).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(1);
+    const after = await store.loadArea(one);
+    expect(after).not.toBe(before);
+    expect(after.bridgeAreas).toHaveLength(1);
+    expect(await store.hasTileOnDisk(index)).toBe(true);
+    // backgroundRefresh: false — nic nie pobiera.
+    await writeOldTile();
+    let quietCalls = 0;
+    const quiet = createOsmStore({ dir, backgroundRefresh: false, fetchTile: async () => (quietCalls++, fresh) });
+    await quiet.loadArea(one);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(quietCalls).toBe(0);
   });
 });

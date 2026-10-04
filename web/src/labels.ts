@@ -138,3 +138,15 @@ export function routeSummary(
     `${formatPercent(comfortShare(route.shadeFraction, comfort))} ${comfortTexts(comfort).shareSuffix}`,
   ].join(' · ');
 }
+
+// ───────────── upał ─────────────
+
+const HEAT_STRESS: ReadonlySet<StressLevel> = new Set(['strong', 'very_strong', 'extreme']);
+
+/** „Upał — weź wodę, 34°C odczuwalna w słońcu” przy silnym (lub większym) obciążeniu cieplnym; inaczej null. */
+export function heatAdvice(thermal: ThermalInfo | null | undefined): string | null {
+  if (!thermal?.stress || !HEAT_STRESS.has(thermal.stress)) return null;
+  if (typeof thermal.feltSunC === 'number') return `Upał — weź wodę, ${formatTemperature(thermal.feltSunC)} odczuwalna w słońcu`;
+  if (typeof thermal.feltMeanC === 'number') return `Upał — weź wodę, ${formatTemperature(thermal.feltMeanC)} odczuwalna`;
+  return 'Upał — weź wodę';
+}

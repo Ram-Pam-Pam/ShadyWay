@@ -11,7 +11,10 @@ import type {
 } from '../server/contracts.ts';
 import { toLonLat } from '../server/geo/project.ts';
 import { lidarTag, sceneForArea } from '../server/shade/cache.ts';
+import { CROWN_BASE_UNIT_M } from '../server/lidar/heights.ts';
+import { tileKey, tilesForBBox } from '../server/osm/store.ts';
 import { ShadeScene } from '../server/shade/scene.ts';
+import { shadowSceneBBox } from '../server/shade/tiles.ts';
 
 const RAD = Math.PI / 180;
 let nextId = 1;
@@ -595,4 +598,165 @@ describe('wydajność z rastrami LiDAR (mikro-benchmark)', () => {
     expect(slowest['roślinność+teren']).toBeGreaterThan(20_000);
     expect(slowest['bez budynków: roślinność+teren']).toBeGreaterThan(20_000);
   }, 180_000);
+});
+
+// ═════════════════════════ v3 ═════════════════════════
+
+describe('v3: dolna granica koron z rastra (lidar.crownBase)', () => {
+  // Szpaler 20 m wysokości wzdłuż osi x (y ∈ [20, 28)), słońce z południa; pieszy idzie po północnej stronie.
+  const vegetation = raster(0, 0, 2, 60, 40, (_x, y) => (y >= 20 && y < 28 ? 20 : 0));
+  const bases = (metres: number): Uint8Array =>
+    Uint8Array.from(vegetation.data, (h) => (h > 0 ? Math.round(metres / CROWN_BASE_UNIT_M) : 0));
+  const withBase = (metres: number): ShadeScene =>
+    scene({ lidar: { vegetation, terrain: null, coverage: 1, crownBase: bases(metres) } });
+
+  it('niskie słońce przechodzi POD wysoko osadzoną koroną na chodnik po drugiej stronie; nisko osadzona zasłania', () => {
+    const low = sun(180, 25);
+    // 3 m za szpalerem: promień z 1,5 m osiąga pod koronami najwyżej 1,5 + 11·tan 25° ≈ 6,6 m.
+    expect(withBase(8).exposureAt(60, 31, low)).toBe(1);
+    expect(withBase(3).exposureAt(60, 31, low)).toBeLessThan(0.3);
+    // Wysokie słońce: w głębi szpaleru cień niezależnie od tego, jak wysoko zaczyna się korona…
+    const high = sun(180, 62);
+    expect(withBase(8).exposureAt(60, 27.5, high)).toBeLessThan(0.2);
+    expect(withBase(3).exposureAt(60, 27.5, high)).toBeLessThan(0.2);
+    // …a przy jego nasłonecznionym brzegu pod wysoką koronę wpada więcej światła niż pod niską.
+    expect(withBase(8).exposureAt(60, 22, high)).toBeGreaterThan(withBase(3).exposureAt(60, 22, high) + 0.3);
+  });
+
+  it('żywopłot z podstawą 0,8 m zasłania niskie słońce na wysokości oczu; bez crownBase działa dawna reguła', () => {
+    const hedge = raster(0, 0, 2, 60, 40, (_x, y) => (y >= 20 && y < 24 ? 3 : 0));
+    const low = sun(180, 5);
+    const fixed = scene({ lidar: lidar(hedge) });
+    // Dawna reguła: warstwa 2–3 m — promień z 1,5 m o nachyleniu 5° mija ją dołem.
+    expect(fixed.exposureAt(60, 25, low)).toBeGreaterThan(0.9);
+    const base = Uint8Array.from(hedge.data, (h) => (h > 0 ? 8 : 0));
+    const dense = scene({ lidar: { vegetation: hedge, terrain: null, coverage: 1, crownBase: base } });
+    expect(dense.exposureAt(60, 25, low)).toBeLessThan(0.6);
+    // crownBase o złej długości jest ignorowane (dawna reguła), 0 w komórce też.
+    const broken = scene({ lidar: { vegetation: hedge, terrain: null, coverage: 1, crownBase: new Uint8Array(3) } });
+    expect(broken.exposureAt(60, 25, low)).toBeCloseTo(fixed.exposureAt(60, 25, low), 9);
+  });
+
+  it('sezon bezlistny: raster przepuszcza więcej światła, ale drzewo zimozielone z OSM tłumi jak latem', () => {
+    const grove = raster(0, 0, 2, 60, 40, (x, y) => (Math.hypot(x - 60, y - 40) < 7 ? 14 : 0));
+    const summer = sun(180, 50);
+    const winter = sun(180, 50, true);
+    const plain = scene({ lidar: lidar(grove) });
+    const evergreen = scene({ lidar: lidar(grove), trees: [tree(60, 40, 14, 7, true)] });
+    const deciduous = scene({ lidar: lidar(grove), trees: [tree(60, 40, 14, 7, false)] });
+    const leafOn = plain.exposureAt(60, 40, summer);
+    const leafOff = plain.exposureAt(60, 40, winter);
+    expect(leafOff).toBeGreaterThan(leafOn + 0.3);
+    expect(evergreen.exposureAt(60, 40, winter)).toBeCloseTo(leafOn, 5);
+    expect(evergreen.exposureAt(60, 40, summer)).toBeCloseTo(leafOn, 5);
+    expect(deciduous.exposureAt(60, 40, winter)).toBeCloseTo(leafOff, 5);
+  });
+});
+
+describe('v3: mosty (lidar.decks)', () => {
+  // Pomost 10 m nad wodą (teren 200 m n.p.m., wierzch 210), oś wzdłuż y; słońce z południa.
+  const terrain = raster(0, 0, 10, 20, 20, () => 200);
+  const deck = { ring: [90, 20, 110, 20, 110, 180, 90, 180, 90, 20], heightM: 10, topZ: 210 };
+  // Resztki pomostu w rastrze roślinności (pas przy krawędzi, którego nie objął obrys) i drzewo 25 m na brzegu.
+  const vegetation = raster(0, 0, 2, 100, 100, (x, y) => {
+    if (x >= 110 && x < 114 && y >= 20 && y < 180) return 10;
+    if (Math.hypot(x - 100, y - 195) < 8) return 25;
+    return 0;
+  });
+  const bridge = scene({ lidar: { vegetation, terrain, coverage: 1, decks: [deck] } });
+  const noon = sun(180, 60);
+
+  it('pieszy NA moście: pełne słońce — pomost i to, co poniżej, go nie zacienia', () => {
+    expect(bridge.exposureAt(100, 100, noon, true)).toBe(1);
+    // Popołudnie, słońce od strony resztek pomostu w rastrze (wschód = strona x > 110): nadal słońce.
+    expect(bridge.exposureAt(108, 100, sun(90, 30), true)).toBe(1);
+    // Bez wiedzy o pomoście te same resztki zacieniałyby pieszego (defekt sprzed poprawki).
+    const unaware = scene({ lidar: { vegetation, terrain, coverage: 1 } });
+    expect(unaware.exposureAt(108, 100, sun(90, 30))).toBeLessThan(0.6);
+    expect(bridge.polylineExposure([100, 30, 100, 170], noon, 6, true)).toBe(1);
+  });
+
+  it('wysokie drzewo przy przyczółku nadal zacienia pieszego na moście', () => {
+    // 5 m przed koroną drzewa 25 m (ponad pomostem zostaje 15 m korony).
+    expect(bridge.exposureAt(100, 178, sun(0, 45), true)).toBeLessThan(0.5);
+  });
+
+  it('droga POD mostem (nie most) jest w pełnym cieniu; maska cieni nie rysuje nic na pomoście', () => {
+    expect(bridge.exposureAt(100, 100, noon)).toBe(0);
+    expect(bridge.polylineExposure([70, 100, 110, 100], noon, 2)).toBeCloseTo(0.5, 1);
+    // Tuż obok pomostu — słońce.
+    expect(bridge.exposureAt(80, 100, noon)).toBe(1);
+    const polygons = bridge.shadowPolygons([0, 0, 200, 200], sun(90, 30));
+    const onDeck = polygons.filter((p) => p.kind === 'tree').some((p) => p.rings[0].some(([lon, lat]) => {
+      const [dLon, dLat] = toLonLat(100, 100);
+      return Math.abs(lon - dLon) < 0.00005 && Math.abs(lat - dLat) < 0.0005;
+    }));
+    expect(onDeck).toBe(false);
+  });
+
+  it('pomost bez prześwitu (przyczółek: teren na poziomie pomostu) nie daje cienia „pod mostem"', () => {
+    const ramp = raster(0, 0, 10, 20, 20, (_x, y) => (y < 100 ? 209 : 200));
+    const s = scene({ lidar: { vegetation: null, terrain: ramp, coverage: 1, decks: [deck] } });
+    expect(s.exposureAt(100, 50, noon)).toBe(1); // teren 209, pomost 210 — to nasyp, nie przejście pod mostem
+    expect(s.exposureAt(100, 150, noon)).toBe(0);
+  });
+
+  it('pomosty bez rastrów (sam obrys i wysokość) też działają; scena bez pomostów — jak dawniej', () => {
+    const s = scene({ lidar: { vegetation: null, terrain: null, coverage: 1, decks: [deck] } });
+    expect(s.exposureAt(100, 100, noon)).toBe(0);
+    expect(s.exposureAt(100, 100, noon, true)).toBe(1);
+    const plain = scene({ lidar: { vegetation: null, terrain: null, coverage: 1, decks: [] } });
+    expect(plain.exposureAt(100, 100, noon)).toBe(1);
+  });
+});
+
+describe('v3: częściowe pokrycie terenem', () => {
+  it('luka w danych terenu nie tworzy progu, który zasłania słońce', () => {
+    // Teren znany tylko na zachodniej połowie i opada na wschód: 240 m przy x = 0, 200 m przy granicy danych
+    // (x = 500), dalej brak danych. Dawne wypełnianie po ~64 komórkach przeskakiwało na średnią (≈ 220 m) —
+    // powstawała 20-metrowa „skarpa" w środku brakującego kafla.
+    const partial = raster(0, 0, 10, 200, 20, (x) => (x < 500 ? 240 - 0.08 * x : NaN));
+    const s = scene({ lidar: lidar(null, partial) });
+    const lowWest = sun(270, 3);
+    const lowEast = sun(90, 3);
+    for (const x of [600, 1000, 1150, 1300, 1900]) {
+      expect(s.exposureAt(x, 100, lowEast)).toBe(1);
+      // Od zachodu słońce zasłania tylko prawdziwy stok (znany teren): daleko od niego jest słońce.
+      if (x >= 1300) expect(s.exposureAt(x, 100, lowWest)).toBe(1);
+    }
+    // Prawdziwy stok nadal zasłania: punkt u jego podnóża, słońce nisko zza wzniesienia.
+    expect(s.exposureAt(480, 100, lowWest)).toBe(0);
+  });
+
+  it('wyspa braku danych wewnątrz rastra dostaje rzędne sąsiadów i nie zasłania słońca', () => {
+    const holed = raster(0, 0, 10, 60, 60, (x, y) => (Math.hypot(x - 300, y - 300) < 100 ? NaN : 200));
+    const s = scene({ lidar: lidar(null, holed), buildings: [box(290, 290, 310, 310, 10)] });
+    expect(s.exposureAt(250, 300, sun(0, 5))).toBe(1);
+    expect(s.exposureAt(250, 300, sun(270, 5))).toBe(1);
+    // Budynek w luce stoi na wypełnionym terenie (200 m) i rzuca zwykły cień.
+    expect(s.exposureAt(300, 320, sun(180, 30))).toBe(0);
+    expect(s.exposureAt(300, 340, sun(180, 30))).toBe(1);
+  });
+});
+
+describe('v3: otulina sceny kafla cieni (szwy na granicach kafli OSM)', () => {
+  const south = sun(180, 45);
+
+  it('kafel cieni przy południowej granicy kafla OSM dostaje sąsiada od strony słońca', () => {
+    // sy = 15018 zaczyna się dokładnie na szwie lat 50,06 (granica kafli OSM 2502/2503).
+    const bbox = shadowSceneBBox({ sx: 3987, sy: 15018 }, south);
+    expect(bbox.south).toBeLessThan(50.06);
+    expect(bbox.south).toBeGreaterThan(50.059); // zasięg 60 m, nie cały sąsiedni kafel
+    expect(tilesForBBox(bbox).map(tileKey)).toEqual(['664_2502', '664_2503']);
+    // Słońce z północy: południowy sąsiad niepotrzebny (zostaje tylko 15 m zapasu… po stronie kafla 2502).
+    const fromNorth = shadowSceneBBox({ sx: 3987, sy: 15019 }, sun(0, 45));
+    expect(tilesForBBox(fromNorth).map(tileKey)).toEqual(['664_2503']);
+  });
+
+  it('kafel cieni w głębi kafla OSM nadal korzysta z jednego kafla; niskie słońce nie sięga dalej niż 400 m', () => {
+    expect(tilesForBBox(shadowSceneBBox({ sx: 3987, sy: 15020 }, south)).map(tileKey)).toEqual(['664_2503']);
+    const low = shadowSceneBBox({ sx: 3987, sy: 15018 }, sun(180, 2));
+    expect(low.south).toBeGreaterThan(50.06 - 0.0037);
+    expect(low.south).toBeLessThan(50.06 - 0.0034);
+  });
 });

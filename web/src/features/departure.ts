@@ -62,6 +62,11 @@ export class DepartureFeature {
     if (this.open) this.render();
   }
 
+  /** Rozwija wykres (np. na polecenie asystenta). */
+  show(): void {
+    if (!this.open) this.setOpen(true);
+  }
+
   private setOpen(open: boolean): void {
     this.open = open;
     this.button.setAttribute('aria-expanded', String(open));

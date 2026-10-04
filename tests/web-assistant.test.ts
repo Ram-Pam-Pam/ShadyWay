@@ -208,17 +208,12 @@ describe('kontekst, podpowiedzi i opis planu', () => {
         comfort: 'shade',
         viaCoolSpot: true,
         selectProfile: 'shadiest',
-      }),
-    ).toEqual([
-      'Rynek Główny → Wawel',
-      'wyjście środa, 15 lipca, 18:30',
-      'profil: bez schodów',
-      'wariant najbardziej zacieniony',
-    ]);
+      }, '2026-07-15'),
+    ).toEqual(['Rynek Główny → Wawel, 18:30', 'bez schodów', 'wariant najbardziej zacieniony']);
     expect(describePlan({ to })).toEqual(['cel: Wawel']);
     expect(describePlan({ time: 'bzdura' })).toEqual([]);
     // Tryb komfortu i punkt chłodu nie mają odpowiednika w interfejsie — nie są stosowane ani opisywane.
-    expect(describePlan({ shadePreference: 1, comfort: 'sun', viaCoolSpot: true })).toEqual(['preferencja: maksimum cienia']);
+    expect(describePlan({ shadePreference: 1, comfort: 'sun', viaCoolSpot: true })).toEqual(['maksimum cienia']);
   });
 
   const route: RouteResult = {

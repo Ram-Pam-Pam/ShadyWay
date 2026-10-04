@@ -19,8 +19,17 @@ const gunzipAsync = promisify(gunzip);
 export const TILE_LAT_DEG = 0.02;
 export const TILE_LON_DEG = 0.03;
 
-/** Zmiana formatu kafla lub reguł parsowania wymaga podbicia wersji — stare pliki zostaną pobrane ponownie. */
-const TILE_FORMAT_VERSION = 3;
+/**
+ * Zmiana formatu kafla lub reguł parsowania wymaga podbicia wersji. v4: mosty (WalkWay.bridge, bridgeAreas).
+ * Pliki w wersjach [MIN_USABLE_TILE_VERSION, bieżąca) są nadal UŻYWANE (bez nowych pól), a odświeżane w tle
+ * przy okazji wyznaczania trasy albo przez skrypt prefetch — awaria Overpass nie może zablokować routingu
+ * na obszarze, który jest już w cache. Starsze pliki liczą się jak brak kafla.
+ */
+export const TILE_FORMAT_VERSION = 4;
+const MIN_USABLE_TILE_VERSION = 3;
+/** Ile przestarzałych kafli może naraz odświeżać się w tle i jak długo czekać po nieudanej próbie. */
+const MAX_BACKGROUND_REFRESHES = 4;
+const REFRESH_COOLDOWN_MS = 10 * 60_000;
 const MEMORY_TILE_LIMIT = 48;
 const MERGED_AREA_LIMIT = 12;
 /**
@@ -93,7 +102,11 @@ export function buildTileQuery(bbox: BBoxLatLon): string {
     '(way["building"];way["building:part"];way["natural"="tree_row"];way["natural"="wood"];way["landuse"="forest"];' +
       'way["leisure"~"^(park|garden)$"];way["amenity"~"^(fountain|shelter|bench)$"];);',
     'out tags geom qt;',
-    '(relation["building"];relation["natural"="wood"];relation["landuse"="forest"];relation["leisure"~"^(park|garden)$"];);',
+    // v3: mosty — drogi i tory z bridge=* (także niepiesze: pomost jest w danych LiDAR) oraz obrysy man_made=bridge.
+    '(way["bridge"]["bridge"!="no"]["highway"];way["bridge"]["bridge"!="no"]["railway"];way["man_made"="bridge"];);',
+    'out tags geom qt;',
+    '(relation["building"];relation["natural"="wood"];relation["landuse"="forest"];relation["leisure"~"^(park|garden)$"];' +
+      'relation["man_made"="bridge"];);',
     'out body geom qt;',
     'way["highway"]->.roads;',
     '.roads out body geom qt;',
@@ -163,6 +176,7 @@ export function mergeTiles(key: string, bboxXY: AreaData['bboxXY'], tiles: Parse
     blockedNodeIds: union((t) => t.blockedNodeIds),
     coolSpots: [...dedupe((t) => t.coolSpots).values()],
     raisedKerbNodeIds: union((t) => t.raisedKerbNodeIds),
+    bridgeAreas: [...dedupe((t) => t.bridgeAreas).values()].map((b) => b.ring),
   };
 }
 
@@ -178,6 +192,8 @@ export interface OsmStoreOptions {
   dir?: string;
   /** Pobranie i sparsowanie jednego kafla; domyślnie zapytanie do Overpass. */
   fetchTile?: (bbox: BBoxLatLon) => Promise<ParsedTile>;
+  /** Czy loadArea odświeża w tle kafle zapisane w starszym formacie (domyślnie tak). */
+  backgroundRefresh?: boolean;
 }
 
 export interface OsmStore {
@@ -215,28 +231,42 @@ class LruMap<V> {
       this.map.delete(oldest);
     }
   }
+
+  deleteWhere(predicate: (key: string) => boolean): void {
+    for (const key of [...this.map.keys()]) if (predicate(key)) this.map.delete(key);
+  }
 }
 
 export function createOsmStore(options: OsmStoreOptions = {}): OsmStore {
   const dir = options.dir ?? DEFAULT_DATA_DIR;
   const fetchTile = options.fetchTile ?? fetchTileFromOverpass;
+  const backgroundRefresh = options.backgroundRefresh ?? true;
   const memory = new LruMap<ParsedTile>(MEMORY_TILE_LIMIT);
   const merged = new LruMap<AreaData>(MERGED_AREA_LIMIT);
   const inFlight = new Map<string, Promise<ParsedTile>>();
+  /** Kafle wczytane z pliku w starszej (ale używalnej) wersji formatu — kandydaci do odświeżenia. */
+  const stale = new Set<string>();
+  const refreshing = new Set<string>();
+  const refreshFailedUntil = new Map<string, number>();
 
   const filePath = (key: string): string => path.join(dir, `${key}.json.gz`);
 
-  /** Plik w starszej wersji formatu liczy się jak brak kafla (zostanie pobrany od nowa). */
+  /** Czy kafel jest na dysku w BIEŻĄCEJ wersji formatu (plik w starszej wersji wymaga pobrania od nowa). */
   async function hasTileOnDisk(tile: TileIndex): Promise<boolean> {
-    return (await readFromDisk(tileKey(tile))) !== null;
+    const onDisk = await readFromDisk(tileKey(tile));
+    return onDisk !== null && !onDisk.stale;
   }
 
-  /** Kafel z dysku albo null (brak pliku, uszkodzony plik lub inna wersja formatu). */
-  async function readFromDisk(key: string): Promise<ParsedTile | null> {
+  /**
+   * Kafel z dysku albo null (brak pliku, uszkodzony plik, zbyt stara lub nieznana wersja formatu).
+   * `stale`: plik w starszej, ale używalnej wersji — dane są poprawne, brakuje tylko pól dodanych później.
+   */
+  async function readFromDisk(key: string): Promise<{ tile: ParsedTile; stale: boolean } | null> {
     try {
       const raw = await gunzipAsync(await readFile(filePath(key)));
       const file = JSON.parse(raw.toString('utf8')) as TileFile;
-      return file.v === TILE_FORMAT_VERSION && file.key === key ? file.tile : null;
+      if (file.key !== key || !(file.v >= MIN_USABLE_TILE_VERSION && file.v <= TILE_FORMAT_VERSION)) return null;
+      return { tile: file.tile, stale: file.v !== TILE_FORMAT_VERSION };
     } catch {
       return null;
     }
@@ -257,8 +287,29 @@ export function createOsmStore(options: OsmStoreOptions = {}): OsmStore {
     if (inMemory) return { tile: inMemory, source: 'memory' };
     const onDisk = await readFromDisk(key);
     if (!onDisk) return null;
-    memory.set(key, onDisk);
-    return { tile: onDisk, source: 'disk' };
+    memory.set(key, onDisk.tile);
+    if (onDisk.stale) stale.add(key);
+    return { tile: onDisk.tile, source: 'disk' };
+  }
+
+  /**
+   * Odświeża w tle kafle w starszym formacie (nie blokuje wołającego, nie rzuca). Po udanym pobraniu scalone
+   * obszary zawierające kafel są unieważniane — następne loadArea złoży je z nowych danych.
+   */
+  function refreshStale(keys: TileIndex[]): void {
+    const now = Date.now();
+    for (const tile of keys) {
+      const key = tileKey(tile);
+      if (!stale.has(key) || refreshing.has(key) || refreshing.size >= MAX_BACKGROUND_REFRESHES) continue;
+      if ((refreshFailedUntil.get(key) ?? 0) > now) continue;
+      refreshing.add(key);
+      fetchAndStore(tile)
+        .then(
+          () => refreshFailedUntil.delete(key),
+          () => refreshFailedUntil.set(key, Date.now() + REFRESH_COOLDOWN_MS),
+        )
+        .finally(() => refreshing.delete(key));
+    }
   }
 
   /** Pobiera kafel z sieci; równoległe żądania tego samego kafla współdzielą jedno zapytanie. */
@@ -270,6 +321,7 @@ export function createOsmStore(options: OsmStoreOptions = {}): OsmStore {
       try {
         const parsed = await fetchTile(tileBBox(tile));
         memory.set(key, parsed);
+        if (stale.delete(key)) merged.deleteWhere((areaKey) => areaKey.split('+').includes(key));
         await writeToDisk(key, parsed);
         return parsed;
       } catch (err) {
@@ -287,7 +339,8 @@ export function createOsmStore(options: OsmStoreOptions = {}): OsmStore {
 
   async function ensureTile(tile: TileIndex): Promise<{ tile: ParsedTile; source: 'memory' | 'disk' | 'network' }> {
     const cached = await cachedTile(tileKey(tile));
-    if (cached) return cached;
+    // Kafel w starszym formacie pobieramy od nowa (przy błędzie stary plik zostaje i nadal służy loadArea).
+    if (cached && !stale.has(tileKey(tile))) return cached;
     return { tile: await fetchAndStore(tile), source: 'network' };
   }
 
@@ -317,6 +370,8 @@ export function createOsmStore(options: OsmStoreOptions = {}): OsmStore {
       });
     }
 
+    if (!opts.cachedOnly && backgroundRefresh && stale.size > 0) refreshStale(indices);
+
     // Klucz i bbox zależą wyłącznie od zestawu faktycznie wczytanych kafli (przy cachedOnly może być niepełny).
     const loaded = present.length > 0 ? present.map((p) => p.index) : indices;
     const key = present.length > 0 ? loaded.map(tileKey).sort().join('+') : EMPTY_AREA_KEY;
@@ -334,7 +389,10 @@ export function createOsmStore(options: OsmStoreOptions = {}): OsmStore {
   return { loadArea, ensureTile, hasTileOnDisk };
 }
 
-const defaultStore = createOsmStore();
+// Testy (vitest) i CIEN_OSM_REFRESH=off: domyślny magazyn nie odświeża w tle starych kafli — żadnych zapytań do sieci.
+const defaultStore = createOsmStore({
+  backgroundRefresh: !process.env.VITEST && !/^(off|0|false)$/i.test(process.env.CIEN_OSM_REFRESH ?? ''),
+});
 
 /**
  * Dane OSM dla obszaru: kafle z cache, brakujące pobierane z Overpass (chyba że cachedOnly — wtedy są pomijane).

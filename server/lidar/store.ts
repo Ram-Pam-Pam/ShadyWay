@@ -4,6 +4,9 @@
 // Kafel na dysku (gzip): nDSM = NMPT − NMT w lokalnych metrach, komórki 1 m, Uint16 w decymetrach
 // + rzędne terenu w komórkach 10 m, Uint16 w decymetrach n.p.m. Roślinność i wysokości budynków liczone są
 // dopiero przy dołączaniu do obszaru (zależą od obrysów z OSM) i trzymane w pamięci per kafel.
+//
+// v3: z tego samego nDSM (bez zmiany formatu pliku) liczone są też dolne granice koron, pomosty mostów
+// (obrysy z OSM potwierdzone w nDSM — wycinane z roślinności) i odrzucenia wysokości budynków pod koronami.
 
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -14,10 +17,14 @@ import { promisify } from 'node:util';
 import type { AreaData, BBoxLatLon, Building, HeightRaster, LidarData } from '../contracts.ts';
 import { clampToCity, loadArea, tileKey, tilesForBBox, type TileIndex } from '../osm/store.ts';
 import {
+  detectDecks,
+  EDGE_MARGIN_M,
   footprintInsideRaster,
   footprintSamples,
+  rasterizeFootprints,
   roofHeightFromSamples,
-  vegetationRaster,
+  vegetationLayers,
+  type BridgeDeck,
   type FootprintSamples,
   type GridSpec,
 } from './heights.ts';
@@ -231,6 +238,10 @@ interface ProcessedTile {
   vegGrid: GridSpec;
   /** Wysokość roślinności w decymetrach (0 = brak, 0xFFFF = brak danych). */
   veg: Uint16Array;
+  /** Dolna granica koron na siatce roślinności (jednostki CROWN_BASE_UNIT_M; 0 = brak). */
+  crownBase: Uint8Array;
+  /** Pomosty mostów potwierdzone w nDSM tego kafla. */
+  decks: BridgeDeck[];
   terrainGrid: GridSpec;
   terrain: Uint16Array;
   /** Budynki w całości w kaflu: wysokość dachu albo null (LiDAR niewiarygodny). */
@@ -276,15 +287,44 @@ function boxesInGrid(boxes: BuildingBox[], grid: GridSpec, marginM: number): Bui
   return selected;
 }
 
-function buildingsSignature(buildings: Building[]): string {
+function buildingsSignature(buildings: Building[], bridges: number[][]): string {
   let sum = 0;
   for (const building of buildings) sum = (sum + Math.abs(building.id)) % 9007199254740881;
-  return `${buildings.length}:${sum}`;
+  let bridgeSum = 0;
+  for (const ring of bridges) bridgeSum = (bridgeSum * 31 + ring.length * 7 + Math.round(Math.abs(ring[0] + ring[1]) * 100)) % 2147483647;
+  return `${buildings.length}:${sum}:${bridges.length}:${bridgeSum}`;
 }
 
-function processTile(tile: LidarTile, buildings: Building[], signature: string): ProcessedTile {
+/** Obrysy mostów, których prostokąt otaczający przecina siatkę. */
+function ringsInGrid(rings: number[][], grid: GridSpec): number[][] {
+  const maxX = grid.x0 + grid.cols * grid.cellM;
+  const maxY = grid.y0 + grid.rows * grid.cellM;
+  return rings.filter((ring) => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let rMaxX = -Infinity;
+    let rMaxY = -Infinity;
+    for (let i = 0; i + 1 < ring.length; i += 2) {
+      if (ring[i] < minX) minX = ring[i];
+      if (ring[i] > rMaxX) rMaxX = ring[i];
+      if (ring[i + 1] < minY) minY = ring[i + 1];
+      if (ring[i + 1] > rMaxY) rMaxY = ring[i + 1];
+    }
+    return rMaxX >= grid.x0 && minX <= maxX && rMaxY >= grid.y0 && minY <= maxY;
+  });
+}
+
+function processTile(tile: LidarTile, buildings: Building[], bridges: number[][], signature: string): ProcessedTile {
   const ndsm = tileNdsmRaster(tile);
-  const vegetation = vegetationRaster(ndsm, buildings, { outCellM: VEG_CELL_M });
+  const built = rasterizeFootprints(buildings, ndsm);
+  // Pomosty mostów: obecne w NMPT, nieobecne w NMT — bez wycięcia wyglądałyby jak kilkunastometrowe „drzewa".
+  const deck = detectDecks(ndsm, bridges, bridges.length > 0 ? tileTerrainRaster(tile) : null);
+  const layers = vegetationLayers(ndsm, buildings, {
+    outCellM: VEG_CELL_M,
+    built,
+    ...(deck.decks.length > 0 ? { exclude: deck.mask } : {}),
+  });
+  const vegetation = layers.top;
   const veg = new Uint16Array(vegetation.data.length);
   for (let i = 0; i < veg.length; i++) {
     const value = vegetation.data[i];
@@ -293,8 +333,9 @@ function processTile(tile: LidarTile, buildings: Building[], signature: string):
 
   const heights = new Map<number, number | null>();
   const partial = new Map<number, FootprintSamples>();
+  const context = { built };
   for (const building of buildings) {
-    const samples = footprintSamples(building, ndsm);
+    const samples = footprintSamples(building, ndsm, EDGE_MARGIN_M, context);
     if (footprintInsideRaster(building, ndsm)) heights.set(building.id, roofHeightFromSamples(samples, building.minHeight));
     else if (samples.all.length > 0) partial.set(building.id, samples);
   }
@@ -303,6 +344,8 @@ function processTile(tile: LidarTile, buildings: Building[], signature: string):
     signature,
     vegGrid: { x0: vegetation.x0, y0: vegetation.y0, cellM: vegetation.cellM, cols: vegetation.cols, rows: vegetation.rows },
     veg,
+    crownBase: layers.crownBase,
+    decks: deck.decks,
     terrainGrid: tile.terrainGrid,
     terrain: tile.terrain,
     heights,
@@ -328,6 +371,20 @@ function pasteU16(target: HeightRaster, grid: GridSpec, values: Uint16Array): nu
     }
   }
   return valid;
+}
+
+/** Wkleja kafel bajtów (dolne granice koron) do mozaiki na siatce o tym samym boku komórki. */
+function pasteU8(target: Uint8Array, targetGrid: GridSpec, grid: GridSpec, values: Uint8Array): void {
+  const colOffset = Math.round((grid.x0 - targetGrid.x0) / targetGrid.cellM);
+  const rowOffset = Math.round((grid.y0 - targetGrid.y0) / targetGrid.cellM);
+  for (let row = 0; row < grid.rows; row++) {
+    const targetRow = row + rowOffset;
+    if (targetRow < 0 || targetRow >= targetGrid.rows) continue;
+    const from = Math.max(0, -colOffset);
+    const to = Math.min(grid.cols, targetGrid.cols - colOffset);
+    if (to <= from) continue;
+    target.set(values.subarray(row * grid.cols + from, row * grid.cols + to), targetRow * targetGrid.cols + colOffset + from);
+  }
 }
 
 function emptyRaster(grid: GridSpec): HeightRaster {
@@ -370,6 +427,8 @@ export interface LidarStoreOptions {
   tileEstimateMs?: number;
   /** Obrysy budynków dla loadLidar(bbox); domyślnie kafle OSM z cache (bez sieci). */
   loadBuildings?: (bbox: BBoxLatLon) => Promise<Building[]>;
+  /** Obrysy mostów dla loadLidar(bbox); domyślnie z kafli OSM w cache (pusto, gdy podano własne loadBuildings). */
+  loadBridges?: (bbox: BBoxLatLon) => Promise<number[][]>;
 }
 
 export interface LidarStore {
@@ -399,18 +458,23 @@ async function cachedOsmBuildings(bbox: BBoxLatLon): Promise<Building[]> {
   return (await loadArea(bbox, { cachedOnly: true })).buildings;
 }
 
+async function cachedOsmBridges(bbox: BBoxLatLon): Promise<number[][]> {
+  return (await loadArea(bbox, { cachedOnly: true })).bridgeAreas ?? [];
+}
+
 export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
   const dir = options.dir ?? DEFAULT_DATA_DIR;
   const fetchTile = options.fetchTile ?? fetchTileFromWcs;
   const budgetMs = options.budgetMs ?? FETCH_BUDGET_MS;
   const loadBuildings = options.loadBuildings ?? cachedOsmBuildings;
+  const loadBridges = options.loadBridges ?? (options.loadBuildings ? async () => [] : cachedOsmBridges);
 
   const processed = new LruMap<ProcessedTile>(PROCESSED_TILE_LIMIT);
   const inFlight = new Map<string, { promise: Promise<LidarTile>; startedAt: number }>();
   const failedUntil = new Map<string, number>();
   /** Kafle, o których wiemy, że są na dysku (oszczędza sprawdzanie pliku przy każdym wywołaniu). */
   const knownOnDisk = new Set<string>();
-  const attachState = new WeakMap<AreaData, { tiles: string; buildings: Building[] }>();
+  const attachState = new WeakMap<AreaData, { tiles: string; buildings: Building[]; bridges: number[][] | undefined }>();
   const attaching = new WeakMap<AreaData, Promise<void>>();
   let tileEstimateMs = options.tileEstimateMs ?? INITIAL_TILE_ESTIMATE_MS;
 
@@ -515,10 +579,12 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
     clearTimeout(timer);
   }
 
-  async function processedTile(tile: TileIndex, boxes: BuildingBox[]): Promise<ProcessedTile | null> {
+  async function processedTile(tile: TileIndex, boxes: BuildingBox[], bridgeRings: number[][]): Promise<ProcessedTile | null> {
     const key = tileKey(tile);
-    const buildings = boxesInGrid(boxes, tileNdsmGrid(tile), BUILDING_SELECT_MARGIN_M);
-    const signature = buildingsSignature(buildings);
+    const grid = tileNdsmGrid(tile);
+    const buildings = boxesInGrid(boxes, grid, BUILDING_SELECT_MARGIN_M);
+    const bridges = bridgeRings.length > 0 ? ringsInGrid(bridgeRings, grid) : bridgeRings;
+    const signature = buildingsSignature(buildings, bridges);
     const known = processed.get(key);
     if (known && known.signature === signature) return known;
     const raw = await readFromDisk(key);
@@ -526,7 +592,7 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
       processed.delete(key);
       return null;
     }
-    const result = processTile(raw, buildings, signature);
+    const result = processTile(raw, buildings, bridges, signature);
     processed.set(key, result);
     return result;
   }
@@ -541,6 +607,7 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
   async function assemble(
     tiles: TileIndex[],
     buildings: Building[],
+    bridges: number[][],
     opts: { cachedOnly?: boolean },
     unchanged?: (availableKeys: string) => boolean,
   ): Promise<{ lidar: LidarData | null; availableKeys: string; heights: Map<number, number> } | 'unchanged'> {
@@ -559,6 +626,8 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
     const terrainGrid = unionGrid(tiles.map((tile) => tileGrid(tile, TERRAIN_CELL_M)), TERRAIN_CELL_M)!;
     const vegetation = emptyRaster(vegGrid);
     const terrain = emptyRaster(terrainGrid);
+    const crownBase = new Uint8Array(vegGrid.cols * vegGrid.rows);
+    const decks = new Map<number[], BridgeDeck>();
 
     const boxes = buildingBoxes(buildings);
     const heights = new Map<number, number>();
@@ -567,11 +636,17 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
     let validCells = 0;
     let loaded = 0;
     for (const tile of available) {
-      const result = await processedTile(tile, boxes);
+      const result = await processedTile(tile, boxes, bridges);
       if (!result) continue; // plik zniknął albo jest uszkodzony
       loaded++;
       validCells += pasteU16(vegetation, result.vegGrid, result.veg);
       pasteU16(terrain, result.terrainGrid, result.terrain);
+      pasteU8(crownBase, vegGrid, result.vegGrid, result.crownBase);
+      // Most przecięty granicą kafla jest wykrywany w każdej części osobno — zostaje ta z większą wysokością.
+      for (const deck of result.decks) {
+        const known = decks.get(deck.ring);
+        if (!known || deck.heightM > known.heightM) decks.set(deck.ring, deck);
+      }
       for (const [id, height] of result.heights) {
         if (height === null) rejected.add(id);
         else heights.set(id, height);
@@ -596,16 +671,21 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
     }
 
     const coverage = Math.min(1, validCells / (vegGrid.cols * vegGrid.rows));
-    return { lidar: { vegetation, terrain, coverage }, availableKeys, heights };
+    return { lidar: { vegetation, terrain, coverage, crownBase, decks: [...decks.values()] }, availableKeys, heights };
   }
 
   async function attachNow(area: AreaData, opts: { cachedOnly?: boolean }): Promise<void> {
     try {
       const tiles = tilesOfArea(area);
-      const result = await assemble(tiles, area.buildings, opts, (availableKeys) => {
-        // Idempotencja: ten sam zestaw kafli i te same budynki co poprzednio → nic nie zmieniamy.
+      const result = await assemble(tiles, area.buildings, area.bridgeAreas ?? [], opts, (availableKeys) => {
+        // Idempotencja: ten sam zestaw kafli i te same budynki (i mosty) co poprzednio → nic nie zmieniamy.
         const previous = attachState.get(area);
-        return previous !== undefined && previous.tiles === availableKeys && previous.buildings === area.buildings;
+        return (
+          previous !== undefined &&
+          previous.tiles === availableKeys &&
+          previous.buildings === area.buildings &&
+          previous.bridges === area.bridgeAreas
+        );
       });
       if (result === 'unchanged') return;
       for (const building of area.buildings) {
@@ -615,7 +695,7 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
         building.heightSource = 'lidar';
       }
       area.lidar = result.lidar;
-      attachState.set(area, { tiles: result.availableKeys, buildings: area.buildings });
+      attachState.set(area, { tiles: result.availableKeys, buildings: area.buildings, bridges: area.bridgeAreas });
     } catch {
       area.lidar = null;
     }
@@ -633,8 +713,8 @@ export function createLidarStore(options: LidarStoreOptions = {}): LidarStore {
   async function loadLidar(bbox: BBoxLatLon, opts: { cachedOnly?: boolean } = {}): Promise<LidarData | null> {
     try {
       const clamped = clampToCity(bbox);
-      const buildings = await loadBuildings(clamped);
-      const result = await assemble(tilesForBBox(clamped), buildings, opts);
+      const [buildings, bridges] = await Promise.all([loadBuildings(clamped), loadBridges(clamped)]);
+      const result = await assemble(tilesForBBox(clamped), buildings, bridges, opts);
       return result === 'unchanged' ? null : result.lidar;
     } catch {
       return null;

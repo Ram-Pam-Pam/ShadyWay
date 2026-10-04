@@ -3,7 +3,7 @@
 
 import type { RouteProfile, RouteResult, RouteStep } from '../../../shared/types.ts';
 import { formatDistance, formatDuration, formatPercent } from '../format.ts';
-import { comfortShare, comfortTexts, routeFactsLine, type AppliedComfort } from '../labels.ts';
+import { comfortShare, comfortTexts, heatAdvice, routeFactsLine, type AppliedComfort } from '../labels.ts';
 import { effectiveComfort, selectedRoute, type AppState } from '../store.ts';
 import { byId, el } from '../util.ts';
 import { icon } from './icons.ts';
@@ -45,6 +45,13 @@ export class RouteList {
   setNavigationHandler(handler: ((route: RouteResult) => void) | null): void {
     this.navigationHandler = handler;
     if (this.lastState) this.render(this.lastState);
+  }
+
+  /** Uruchamia nawigację tak, jak przycisk „Nawiguj” (np. na polecenie asystenta); false, gdy nawigacja nie jest dostępna. */
+  navigate(route: RouteResult): boolean {
+    if (!this.navigationHandler) return false;
+    this.navigationHandler(route);
+    return true;
   }
 
   /** Po ustawieniu obsługi na karcie wybranej trasy pojawia się przycisk „Wyjaśnij trasę” (asystent AI). */
@@ -157,6 +164,7 @@ export class RouteList {
   private detail(route: RouteResult): HTMLElement | null {
     const steps = route.steps ?? [];
     const facts = routeFactsLine(route);
+    const heat = heatAdvice(route.thermal);
 
     const start = el('button', 'action-button', icon('nav'), el('span', '', 'Nawiguj'));
     start.type = 'button';
@@ -193,10 +201,11 @@ export class RouteList {
     explain.hidden = this.explainHandler === null;
     explain.addEventListener('click', () => this.explainHandler?.(route));
 
-    if (!facts && start.hidden && toggle.hidden && explain.hidden) return null;
+    if (!facts && !heat && start.hidden && toggle.hidden && explain.hidden) return null;
     return el(
       'div',
       'route__detail',
+      heat ? el('p', 'route__heat', heat) : null,
       facts ? el('p', 'route__facts', facts) : null,
       el('div', 'route__actions', start, toggle, explain),
       list,

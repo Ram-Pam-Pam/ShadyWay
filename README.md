@@ -1,4 +1,4 @@
-# Cień — piesza nawigacja po Krakowie w cieniu
+# Canopy — piesza nawigacja po Krakowie w cieniu
 
 Aplikacja webowa typu smart city: prowadzi pieszego z punktu A do B po chodnikach i ścieżkach tak, żeby
 o wybranej dacie i godzinie jak najmniej iść w słońcu (a zimą — odwrotnie: jak najwięcej). Dla każdego
@@ -18,13 +18,12 @@ z osobnymi chodnikami (np. Aleje Trzech Wieszczów) wybiera tę stronę, która 
 - **Światła i schody** — szacowany czas czekania na przejściach jest wliczony w czas trasy; karta trasy
   pokazuje liczbę przejść z sygnalizacją i odcinków schodów.
 - **Komfort cieplny** — temperatura odczuwalna w słońcu i w cieniu oraz kategoria obciążenia cieplnego.
-- **Punkty chłodu** — woda pitna, fontanny, ławki, parki i wiaty jako warstwa mapy; opcja „Przez punkt
-  chłodu" prowadzi trasę obok wody, jeśli nadkłada to niewiele drogi.
 - **„Kiedy najlepiej wyjść?"** — porównanie godzin wyjścia w oknie 6 lub 12 h (wykres ocen komfortu).
 - **Wskazówki krok po kroku i nawigacja** — lista manewrów po polsku, prowadzenie po GPS z automatycznym
   przeliczaniem po zejściu z trasy, komunikaty głosowe; `?demo=1` w adresie uruchamia symulację marszu.
 - **Asystent AI** (opcjonalny) — rozmowa po polsku: „Zaplanuj trasę w cieniu z AGH na Wawel dziś o 15".
-  Wymaga klucza Gemini API (patrz niżej); bez klucza reszta aplikacji działa normalnie.
+  Asystent sam obsługuje aplikację: ustawia start, cel i godzinę, zmienia profil i suwak cienia, zaznacza
+  wariant trasy, uruchamia nawigację („prowadź"), przełącza warstwy mapy i otwiera „Kiedy wyjść?". Wymaga klucza Gemini API (patrz niżej); bez klucza reszta aplikacji działa normalnie.
 - **PWA** — aplikację można zainstalować; offline pokazuje ostatnio wyznaczoną trasę i obejrzane kafle mapy.
 
 ## Uruchomienie
@@ -49,7 +48,7 @@ npm start
 | `PORT` | Port serwera (domyślnie 3001). |
 | `HOST` | Adres nasłuchu (domyślnie `localhost`; `HOST=0.0.0.0` udostępnia aplikację w sieci lokalnej). |
 | `GEMINI_API_KEY` | Klucz Gemini API (Google AI Studio, aistudio.google.com) — włącza asystenta AI; zamiennie `GOOGLE_API_KEY`. Bez niego `/api/assistant/status` zwraca `available: false`, a interfejs pokazuje informację, że asystent jest niedostępny. |
-| `CIEN_AI_MODEL` | Model asystenta (domyślnie `gemini-3.8-flash`); można wskazać inny model Gemini, np. tańszy `gemini-3.5-flash-lite`. |
+| `CIEN_AI_MODEL` | Model asystenta (domyślnie tani `gemini-3.5-flash-lite`); można wskazać inny model Gemini, np. mocniejszy i droższy `gemini-3.8-flash`. |
 | `CIEN_LIDAR` | `off` wyłącza dane LiDAR — model cienia korzysta wtedy tylko z OSM (do porównań i diagnostyki). |
 | `CIEN_LIDAR_BUDGET_MS` | Ile najdłużej zapytanie o trasę czeka na pobranie brakujących kafli LiDAR (domyślnie 25 000 ms). |
 
@@ -86,15 +85,18 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 1. **Dane mapy** — budynki, drzewa, zadrzewienia, sieć piesza (z nawierzchnią, sygnalizacją, schodami,
    krawężnikami) i punkty chłodu z OpenStreetMap, pobierane kaflami przez Overpass API (`server/osm`).
 2. **LiDAR** — z usług WCS GUGiK pobierane są numeryczny model terenu (NMT) i pokrycia terenu (NMPT);
-   różnica daje wysokość obiektów nad gruntem. Budynek dostaje 85. percentyl wysokości w swoim obrysie,
-   wszystko powyżej 2,5 m poza obrysami budynków jest traktowane jako roślinność (raster ok. 2 m),
-   a NMT daje rzędne terenu (`server/lidar`).
+   różnica daje wysokość obiektów nad gruntem. Budynek dostaje 85. percentyl wysokości w swoim obrysie
+   (mały budynek pod koronami drzew — niski percentyl albo wysokość z OSM), wszystko powyżej 2,5 m poza
+   obrysami budynków i pomostami mostów jest traktowane jako roślinność (raster ok. 2 m: szczyt korony
+   i oszacowana z kształtu koron dolna granica), a NMT daje rzędne terenu (`server/lidar`).
 3. **Słońce** — azymut i wysokość słońca liczone dla daty i godziny; sezon bezlistny wg kalendarza
    (`server/geo/sun.ts`).
 4. **Cień** — dla punktów próbkowanych co kilka metrów wzdłuż każdego odcinka sieci sprawdzamy, czy promień
    w stronę słońca przecina bryłę budynku, koronę drzewa (marsz po rastrze roślinności; korona przepuszcza
    część światła, zimą większość) albo teren (`server/shade/scene.ts`). Wynik to ekspozycja 0–1; liczona
-   jest dla chwili, w której pieszy faktycznie dojdzie do odcinka.
+   jest dla chwili, w której pieszy faktycznie dojdzie do odcinka. Pod wysoko osadzonymi koronami niskie
+   słońce przechodzi dołem; żywopłoty i krzewy zasłaniają je od ok. 0,8 m. Na moście pieszy stoi na pomoście
+   (pomost go nie zacienia), a droga pod mostem jest w cieniu.
 5. **Trasa** — A* po grafie pieszym, koszt = długość × (1 + waga słońca × ekspozycja + waga upału × LST)
    × kara za rodzaj drogi, plus czas czekania na przejściach (`server/graph`). W trybie zimowym ekspozycja
    jest odwracana (karany jest cień). Waga słońca jest skalowana pogodą (zachmurzenie, promieniowanie
@@ -107,11 +109,13 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 7. **Bramy** — węzły dróg z barierą zamkniętą dla pieszych przerywają graf: trasa nie prowadzi przez
    prywatne i zamknięte bramy.
 8. **Warstwa cieni** — wielokąty cieni liczone są kaflami ok. 360 m na stałej siatce i zapamiętywane.
-   Cienie budynków to rzuty obrysów, cienie drzew i terenu to zwektoryzowana maska rastrowa (komórki 2,5 m).
+   Cienie budynków to rzuty obrysów, cienie drzew i terenu to zwektoryzowana maska rastrowa (komórki 2,5 m);
+   kafel przy granicy kafla danych korzysta też z sąsiedniego kafla od strony słońca.
    Jedno zapytanie obejmuje najwyżej ok. 4 km².
-9. **Asystent AI** — model Gemini (Google) z narzędziami (geokodowanie, plan trasy, najlepsza godzina, punkty chłodu,
-   pogoda), które wywołują tę samą logikę co API (`server/service.ts`); odpowiedź płynie strumieniem SSE,
-   a gotowy plan interfejs stosuje na mapie (`server/ai`).
+9. **Asystent AI** — model Gemini (Google) z narzędziami (geokodowanie, plan trasy, najlepsza godzina,
+   pogoda, sterowanie aplikacją), które wywołują tę samą logikę co API (`server/service.ts`); odpowiedź płynie
+   strumieniem SSE, a zwalidowany plan (punkty, godzina, profil, wariant, nawigacja, warstwy, „Kiedy wyjść?")
+   interfejs stosuje u użytkownika (`server/ai`).
 
 ### Ograniczenia
 
@@ -121,9 +125,18 @@ ignorowane i pobierane od nowa — przy pierwszej trasie albo przez `npm run pre
 - **Jedna wysokość na obrys budynku** — wieże kościołów wychodzą za nisko (np. Kościół Mariacki ok. 38 m
   zamiast ok. 80 m), chyba że OSM ma osobne obrysy `building:part`. Ok. 10% budynków zostaje przy
   wysokości z OSM (za mało komórek rastra, wynik poza zakresem 2–150 m).
-- **„Roślinność" to wszystko powyżej 2,5 m poza obrysami budynków** — także wiadukty, mury, niezmapowane
-  obiekty i wysokie pojazdy z dnia nalotu. Raster nie odróżnia drzew iglastych, więc zimą wszystkie korony
-  są traktowane jak bezlistne.
+- **„Roślinność" to wszystko powyżej 2,5 m poza obrysami budynków i mostów** — także mury, niezmapowane
+  obiekty i wysokie pojazdy z dnia nalotu. Mosty i wiadukty są wycinane tylko wtedy, gdy są w OSM
+  (`bridge=*`, `man_made=bridge`) i mają w danych gładki pomost; szerokość pomostu jest szacowana z klasy
+  drogi, a elementy nad pomostem (łuki, kratownice) znikają razem z nim. Raster nie odróżnia drzew iglastych:
+  zimą korony są traktowane jak bezlistne, poza drzewami oznaczonymi w OSM jako zimozielone.
+- **Dolna granica koron jest oszacowaniem** — model powierzchni widzi tylko wierzch liści. Przyjmujemy
+  20–40% wysokości drzewa zależnie od stromości brzegu korony (krzewy i żywopłoty: od 0,8 m); pnie nie
+  rzucają cienia. Na granicach kafli LiDAR oszacowanie korzysta tylko z danych jednego kafla.
+- **Małe budynki pod drzewami** (do 200 m², ok. 2% budynków w centrum) nie dostają wysokości korony: gdy przez
+  prześwity widać niższy dach, bierzemy jego wysokość, inaczej zostaje wysokość z OSM (często domyślne 10 m).
+- **Kafle mapy w starszym formacie** (pobrane przed wersją z mostami) działają dalej, ale bez mostów — są
+  odświeżane w tle przy wyznaczaniu trasy albo przez `npm run prefetch`.
 - **Warstwa cieni drzew jest przybliżeniem** modelu używanego do tras: na 3000 losowych punktów przy Plantach
   wielokąty zgadzały się z dokładnym modelem w 94,8%. Cień budynku na pochyłym terenie jest w warstwie
   przybliżony; cień rzeźby terenu jest rysowany jak cień budynku.

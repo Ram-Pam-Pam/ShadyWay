@@ -5,6 +5,9 @@
 //
 // v2: gdy dla kafla OSM są na dysku dane LiDAR, dołączamy je (bez pobierania z sieci) — cienie roślinności
 // i terenu powstają wtedy z maski rastrowej liczonej dla punktów W KAFLU (nie dla obiektów w nim stojących).
+//
+// v3: scena kafla cieni obejmuje także „otulinę" — sąsiednie kafle OSM (tylko z cache) od strony słońca w zasięgu
+// cienia. Bez niej maska gubiła cienie drzew i terenu w pasie wzdłuż granic kafli OSM (raster sąsiada był nieznany).
 
 import { KRAKOW_BBOX, KRAKOW_CENTER } from '../../shared/types.ts';
 import type { AreaData, BBoxLatLon, ShadowPolygon, SunPosition } from '../contracts.ts';
@@ -26,6 +29,30 @@ const REACH_HEIGHT_M = 60;
 /** Zapas na rozmiar samego obiektu: kafel wybieramy po jego środku, a obrys może sięgać dalej. */
 const CASTER_HALF_SIZE_M = 60;
 const CACHE_LIMIT = 400;
+/** Zapas (m) wokół kafla cieni po stronach odwróconych od słońca — korony i obrysy wystające zza granicy. */
+const HALO_BACK_M = 15;
+
+/**
+ * Obszar sceny dla kafla cieni: sam kafel poszerzony W STRONĘ SŁOŃCA o zasięg cienia (drzewa i budynki sąsiedniego
+ * kafla OSM zacieniają punkty tego kafla) i minimalnie z pozostałych stron. Wewnątrz kafla OSM daje to ten sam
+ * jeden kafel co dawniej; przy jego granicy od strony słońca — dwa (w narożniku do czterech).
+ */
+export function shadowSceneBBox(tile: ShadowTile, sun: SunPosition): BBoxLatLon {
+  const bounds = tileBounds(tile);
+  const reach = sun.altitude > 0 ? Math.min(MAX_SHADOW_M, REACH_HEIGHT_M / Math.tan(sun.altitude)) : 0;
+  const towardSunX = Math.sin(sun.azimuth) * reach;
+  const towardSunY = Math.cos(sun.azimuth) * reach;
+  const [minX, minY] = toXY(bounds.south, bounds.west);
+  const [maxX, maxY] = toXY(bounds.north, bounds.east);
+  const [south, west] = toLatLon(minX + Math.min(-HALO_BACK_M, towardSunX), minY + Math.min(-HALO_BACK_M, towardSunY));
+  const [north, east] = toLatLon(maxX + Math.max(HALO_BACK_M, towardSunX), maxY + Math.max(HALO_BACK_M, towardSunY));
+  return {
+    west: Math.max(west, KRAKOW_BBOX.west),
+    south: Math.max(south, KRAKOW_BBOX.south),
+    east: Math.min(east, KRAKOW_BBOX.east),
+    north: Math.min(north, KRAKOW_BBOX.north),
+  };
+}
 
 export interface ShadowTile {
   sx: number;
@@ -127,11 +154,19 @@ export async function shadowTileFragment(tile: ShadowTile, bucket: number, sun: 
   }
 
   const bounds = tileBounds(tile);
-  // Punkt w środku kafla cieni wskazuje dokładnie jeden kafel OSM — ten, który go zawiera.
+  // Punkt w środku kafla cieni wskazuje dokładnie jeden kafel OSM — ten, który go zawiera. Bez niego kafla nie ma.
   const lat = (bounds.south + bounds.north) / 2;
   const lon = (bounds.west + bounds.east) / 2;
-  const area = await loadArea({ west: lon, south: lat, east: lon, north: lat }, { cachedOnly: true });
-  if (area.key === EMPTY_AREA_KEY) return { fragment: null, computed: false };
+  const own = await loadArea({ west: lon, south: lat, east: lon, north: lat }, { cachedOnly: true });
+  if (own.key === EMPTY_AREA_KEY) return { fragment: null, computed: false };
+  // Scena z otuliną: sąsiednie kafle OSM od strony słońca (tylko te, które są w cache).
+  let area = own;
+  try {
+    const halo = await loadArea(shadowSceneBBox(tile, sun), { cachedOnly: true });
+    if (halo.key !== EMPTY_AREA_KEY) area = halo;
+  } catch {
+    // bbox poza miastem — zostaje sam kafel
+  }
   await attachCachedLidar(area);
   const lidar = lidarTag(area);
   if (lidarState.size > CACHE_LIMIT) lidarState.clear();

@@ -1,7 +1,8 @@
-// „Asystent Cienia”: czat z asystentem AI w zakładce panelu (na telefonie — arkusz na całą wysokość).
-// Odpowiedź przychodzi strumieniem zdarzeń (tekst, czynności, plan); plan jest od razu stosowany na mapie.
+// „Asystent Canopy”: czat z asystentem AI w zakładce panelu (na telefonie — arkusz na całą wysokość).
+// Odpowiedź przychodzi strumieniem zdarzeń (tekst, czynności, plan); plan wykonuje w aplikacji assistant/planRunner.ts.
+// Z asystentem można pisać albo rozmawiać głosem (features/assistantVoice.ts).
 
-import type { AssistantEvent, AssistantPlan, AssistantStatus, RouteResult } from '../../../shared/types.ts';
+import type { AssistantEvent, AssistantMessage, AssistantStatus, RouteResult } from '../../../shared/types.ts';
 import { ApiRequestError, errorMessage, fetchAssistantStatus, isAbortError, streamAssistant } from '../api.ts';
 import type { App } from '../app.ts';
 import {
@@ -9,42 +10,22 @@ import {
   MESSAGE_CHAR_LIMIT,
   buildContext,
   buildRequestMessages,
-  describePlan,
   explainPrompt,
   suggestions,
   type ChatMessage,
+  type PlanResult,
 } from '../assistant/chat.ts';
 import { renderMarkdown } from '../assistant/markdown.ts';
+import { createPlanQueue, type PlanHost } from '../assistant/planRunner.ts';
 import { effectiveComfort, selectedRoute } from '../store.ts';
 import { icon, type IconName } from '../ui/icons.ts';
+import { nowWallTime } from '../time.ts';
 import { byId, el } from '../util.ts';
+import { installAssistantVoice } from './assistantVoice.ts';
 
-// Web Speech API (rozpoznawanie mowy) nie ma typów w lib.dom — opisujemy tylko to, czego używamy.
-interface SpeechRecognitionResultLike {
-  readonly isFinal: boolean;
-  readonly 0: { readonly transcript: string };
-}
-interface SpeechRecognitionEventLike {
-  readonly resultIndex: number;
-  readonly results: ArrayLike<SpeechRecognitionResultLike>;
-}
-interface SpeechRecognitionLike {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-}
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
-
-function speechRecognitionCtor(): SpeechRecognitionCtor | null {
-  const scope = window as unknown as { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor };
-  return scope.SpeechRecognition ?? scope.webkitSpeechRecognition ?? null;
-}
+/** Najdłużej tyle czekamy na przeliczenie trasy (serwer bywa wolny, gdy dociąga dane mapy) i na koniec odpowiedzi. */
+const ROUTE_WAIT_MS = 75_000;
+const REPLY_WAIT_MS = 45_000;
 
 type Availability = { state: 'checking' } | { state: 'ready'; status: AssistantStatus } | { state: 'failed'; reason: string };
 
@@ -73,7 +54,6 @@ export function installAssistant(app: App): AssistantHandle {
   let nextId = 1;
   let request: AbortController | null = null;
   let renderQueued = false;
-  let recognition: SpeechRecognitionLike | null = null;
 
   // ───────────── szkielet ─────────────
 
@@ -81,7 +61,7 @@ export function installAssistant(app: App): AssistantHandle {
   const reset = el('button', 'chip-button chip-button--small', icon('plus'), el('span', '', 'Nowa rozmowa'));
   reset.type = 'button';
   reset.hidden = true;
-  const title = el('h2', 'assistant__title', 'Asystent Cienia');
+  const title = el('h2', 'assistant__title', 'Asystent Canopy');
   title.id = 'assistant-title';
   const head = el('header', 'assistant__head', el('span', 'assistant__mark', icon('sparkle')), el('div', 'assistant__heading', title, subtitle), reset);
 
@@ -95,13 +75,13 @@ export function installAssistant(app: App): AssistantHandle {
   input.id = 'assistant-input';
   input.rows = 1;
   input.maxLength = MESSAGE_CHAR_LIMIT;
-  input.placeholder = 'Napisz, dokąd i kiedy chcesz iść…';
+  const placeholder = 'Dokąd idziesz?';
+  input.placeholder = placeholder;
   input.setAttribute('aria-label', 'Wiadomość do asystenta');
   input.setAttribute('enterkeyhint', 'send');
 
-  const mic = iconButton('mic', 'Dyktuj wiadomość', 'icon-button assistant__mic');
-  mic.setAttribute('aria-pressed', 'false');
-  mic.hidden = speechRecognitionCtor() === null;
+  const speakerButton = iconButton('mute', 'Czytaj odpowiedzi na głos', 'icon-button assistant__speaker');
+  const mic = iconButton('mic', 'Powiedz to na głos', 'icon-button assistant__mic');
   const submit = iconButton('send', 'Wyślij', 'assistant__send');
   submit.type = 'submit';
   const stop = iconButton('stop', 'Zatrzymaj odpowiedź', 'assistant__send assistant__send--stop');
@@ -110,7 +90,7 @@ export function installAssistant(app: App): AssistantHandle {
   const voiceNote = el('p', 'assistant__note');
   voiceNote.setAttribute('role', 'status');
   voiceNote.hidden = true;
-  const composer = el('form', 'assistant__composer', input, mic, submit, stop);
+  const composer = el('form', 'assistant__composer', input, speakerButton, mic, submit, stop);
   const disclaimer = el('p', 'assistant__disclaimer', 'Asystent AI może się mylić — przed wyjściem sprawdź trasę na mapie.');
   const footer = el('div', 'assistant__footer', voiceNote, composer, disclaimer);
 
@@ -119,7 +99,7 @@ export function installAssistant(app: App): AssistantHandle {
   const fab = el('button', 'assistant-fab', icon('sparkle'), el('span', 'assistant-fab__label', 'Asystent'));
   fab.type = 'button';
   fab.id = 'assistant-fab';
-  fab.setAttribute('aria-label', 'Otwórz Asystenta Cienia');
+  fab.setAttribute('aria-label', 'Otwórz Asystenta Canopy');
   byId<HTMLElement>('map-wrap').append(fab);
 
   // ───────────── widok ─────────────
@@ -139,10 +119,11 @@ export function installAssistant(app: App): AssistantHandle {
     const available = isAvailable();
     footer.hidden = !available;
     reset.hidden = history.length === 0;
-    submit.hidden = busy();
-    stop.hidden = !busy();
+    // „Zatrzymaj” przerywa odpowiedź, a po jej zakończeniu — czytanie na głos.
+    const stoppable = busy() || voice.state().phase === 'speaking';
+    submit.hidden = stoppable;
+    stop.hidden = !stoppable;
     submit.disabled = input.value.trim() === '';
-    mic.disabled = busy();
     if (availability.state === 'ready' && availability.status.available && availability.status.model) {
       subtitle.textContent = `Zapytaj o trasę, cień albo pogodę · ${availability.status.model}`;
     }
@@ -191,26 +172,30 @@ export function installAssistant(app: App): AssistantHandle {
     );
   }
 
-  function planView(plan: AssistantPlan): HTMLElement {
-    const details = describePlan(plan);
-    const show = el('button', 'chip-button chip-button--small', el('span', '', 'Pokaż trasę'));
-    show.type = 'button';
-    show.addEventListener('click', () => {
-      tabs.select('plan');
-      sheet.collapse();
-    });
-    return el(
-      'div',
-      'plan-applied',
-      el('span', 'plan-applied__mark', icon('check')),
-      el(
-        'div',
-        'plan-applied__text',
-        el('strong', '', 'Zastosowano na mapie'),
-        details.length > 0 && el('span', '', details.join(' · ')),
-      ),
-      show,
-    );
+  /** Jedna zwarta linia potwierdzenia planu („Ustawiono: AGH → Wawel, 15:00 · nawigacja uruchomiona”). */
+  function planView(result: PlanResult | undefined): HTMLElement | null {
+    if (!result) {
+      return el('div', 'plan-applied plan-applied--pending', el('span', 'spinner spinner--small'), el('span', 'plan-applied__text', 'Ustawiam w aplikacji…'));
+    }
+    if (!result.summary && !result.problem) return null;
+    const box = el('div', 'plan-applied-group');
+    if (result.summary) {
+      const show = el('button', 'chip-button chip-button--small', el('span', '', 'Pokaż trasę'));
+      show.type = 'button';
+      show.addEventListener('click', () => {
+        tabs.select('plan');
+        sheet.collapse();
+      });
+      box.append(
+        el('div', 'plan-applied', icon('check'), el('span', 'plan-applied__text', result.summary), result.routed && !result.navigating ? show : null),
+      );
+    }
+    if (result.problem) {
+      const problem = el('p', 'plan-applied plan-applied--problem', result.problem);
+      problem.setAttribute('role', 'alert');
+      box.append(problem);
+    }
+    return box;
   }
 
   function fillMessage(element: HTMLElement, message: ChatMessage): void {
@@ -242,7 +227,7 @@ export function installAssistant(app: App): AssistantHandle {
       typing.setAttribute('aria-label', 'Asystent pisze');
       children.push(typing);
     }
-    for (const plan of message.plans) children.push(planView(plan));
+    message.plans.forEach((_plan, index) => children.push(planView(message.planResults?.[index])));
     if (message.status === 'stopped') children.push(el('p', 'msg__note', 'Zatrzymano odpowiedź.'));
     if (message.status === 'error') {
       const retry = el('button', 'chip-button chip-button--small', icon('retry'), el('span', '', 'Spróbuj ponownie'));
@@ -316,15 +301,27 @@ export function installAssistant(app: App): AssistantHandle {
   function handleEvent(message: ChatMessage, event: AssistantEvent): void {
     switch (event.type) {
       case 'text':
-        if (typeof event.delta === 'string') message.text += event.delta;
+        if (typeof event.delta === 'string') {
+          message.text += event.delta;
+          voice.replyText(message.text);
+        }
         break;
       case 'tool':
         if (typeof event.label === 'string' && event.label) message.tools.push(event.label);
         break;
       case 'plan':
         if (event.plan && typeof event.plan === 'object') {
-          app.actions.applyPlan(event.plan);
-          message.plans.push(event.plan);
+          const index = message.plans.push(event.plan) - 1;
+          // Plan zaraz zabierze rozmowę sprzed oczu (nawigacja, zakładka „Trasa”) — mikrofon nie włącza się już sam.
+          if (event.plan.startNavigation === true || event.plan.openDeparture === true) voice.dispatch({ type: 'hangup' });
+          const results = (message.planResults ??= []);
+          const settle = (result: PlanResult): void => {
+            results[index] = result;
+            if (history.includes(message)) queueStreamRender(message);
+          };
+          applyPlan(event.plan).then(settle, () =>
+            settle({ summary: null, problem: 'Nie udało się zastosować planu w aplikacji.', routed: false, navigating: false }),
+          );
         }
         break;
       case 'error':
@@ -339,16 +336,20 @@ export function installAssistant(app: App): AssistantHandle {
   }
 
   /** Wysyła historię (kończącą się wiadomością użytkownika) i strumieniuje odpowiedź do nowej wiadomości asystenta. */
-  async function run(): Promise<void> {
+  function run(viaVoice = false): void {
     const messages = buildRequestMessages(history);
     if (messages.length === 0 || messages[messages.length - 1].role !== 'user') return;
+    if (!viaVoice) voice.textSent();
     const reply: ChatMessage = { id: nextId++, role: 'assistant', text: '', tools: [], plans: [], status: 'streaming' };
     history.push(reply);
     const controller = new AbortController();
     request = controller;
     renderLog();
     scrollToEnd();
+    void stream(reply, messages, controller);
+  }
 
+  async function stream(reply: ChatMessage, messages: AssistantMessage[], controller: AbortController): Promise<void> {
     try {
       await streamAssistant({ messages, context: buildContext(store.get()) }, (event) => handleEvent(reply, event), controller.signal);
       if (reply.status === 'streaming') reply.status = 'done';
@@ -367,20 +368,21 @@ export function installAssistant(app: App): AssistantHandle {
       }
     } finally {
       if (request === controller) request = null;
+      voice.replyEnded(reply.status === 'done', reply.text);
       const stick = nearBottom();
       renderLog();
       if (stick) scrollToEnd();
     }
   }
 
-  function send(text: string, apiText?: string, note?: string): void {
+  function send(text: string, extra: { apiText?: string; note?: string; viaVoice?: boolean } = {}): boolean {
     const trimmed = text.trim();
-    if (!trimmed || busy() || !isAvailable()) return;
-    stopListening();
-    history.push({ id: nextId++, role: 'user', text: trimmed, apiText, note, tools: [], plans: [], status: 'done' });
+    if (!trimmed || busy() || !isAvailable()) return false;
+    history.push({ id: nextId++, role: 'user', text: trimmed, apiText: extra.apiText, note: extra.note, tools: [], plans: [], status: 'done' });
     input.value = '';
     autosize();
-    void run();
+    run(extra.viaVoice === true);
+    return true;
   }
 
   function retryLast(): void {
@@ -389,13 +391,13 @@ export function installAssistant(app: App): AssistantHandle {
     if (!last || last.role !== 'assistant') return;
     history.pop();
     elements.delete(last.id);
-    void run();
+    run();
   }
 
   function explain(route: RouteResult): void {
     open();
     if (busy()) return;
-    send(EXPLAIN_QUESTION, explainPrompt(route, effectiveComfort(store.get())), 'Dołączono dane wybranej trasy');
+    send(EXPLAIN_QUESTION, { apiText: explainPrompt(route, effectiveComfort(store.get())), note: 'Dołączono dane wybranej trasy' });
   }
 
   function explainSelected(): void {
@@ -410,55 +412,70 @@ export function installAssistant(app: App): AssistantHandle {
     if (!sheet.isMobile() && isAvailable()) input.focus();
   }
 
-  // ───────────── dyktowanie ─────────────
+  // ───────────── głos ─────────────
 
-  function stopListening(): void {
-    recognition?.stop();
-  }
-
-  function toggleListening(): void {
-    if (recognition) {
-      recognition.stop();
-      return;
-    }
-    const Ctor = speechRecognitionCtor();
-    if (!Ctor) return;
-    const instance = new Ctor();
-    const base = input.value.trim();
-    instance.lang = 'pl-PL';
-    instance.continuous = false;
-    instance.interimResults = true;
-    instance.onresult = (event) => {
-      let transcript = '';
-      for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript;
-      input.value = [base, transcript.trim()].filter(Boolean).join(' ').slice(0, MESSAGE_CHAR_LIMIT);
+  const voice = installAssistantVoice({
+    input,
+    composer,
+    mic,
+    speakerButton,
+    note: voiceNote,
+    placeholder,
+    send: (text) => send(text, { viaVoice: true }),
+    onChange: () => {
       autosize();
       syncControls();
-    };
-    instance.onerror = (event) => {
-      if (event.error === 'aborted' || event.error === 'no-speech') return;
-      voiceNote.textContent =
-        event.error === 'not-allowed' || event.error === 'service-not-allowed'
-          ? 'Brak zgody na mikrofon — zezwól na niego w przeglądarce albo wpisz wiadomość.'
-          : 'Nie udało się rozpoznać mowy. Spróbuj ponownie albo wpisz wiadomość.';
-      voiceNote.hidden = false;
-    };
-    instance.onend = () => {
-      recognition = null;
-      mic.setAttribute('aria-pressed', 'false');
-      mic.classList.remove('is-listening');
-      input.focus();
-    };
-    voiceNote.hidden = true;
-    try {
-      instance.start();
-    } catch {
-      return;
-    }
-    recognition = instance;
-    mic.setAttribute('aria-pressed', 'true');
-    mic.classList.add('is-listening');
+    },
+  });
+
+  // ───────────── plan: asystent obsługuje aplikację ─────────────
+
+  /** Spełnia się, gdy `ready()` zwróci prawdę albo minie `timeoutMs` (sprawdzane przy zmianach stanu i co chwilę). */
+  function until(ready: () => boolean, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      if (ready()) return resolve();
+      const finish = (): void => {
+        clearInterval(poll);
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve();
+      };
+      const check = (): void => {
+        if (ready()) finish();
+      };
+      const unsubscribe = store.subscribe(check);
+      const poll = setInterval(check, 150);
+      const timeout = setTimeout(finish, timeoutMs);
+    });
   }
+
+  /** Odpowiedź dopisana i przeczytana do końca — dopiero wtedy wolno zabrać użytkownikowi rozmowę sprzed oczu. */
+  function replySettled(): Promise<void> {
+    return until(() => !busy() && voice.state().phase !== 'speaking', REPLY_WAIT_MS);
+  }
+
+  const planHost: PlanHost = {
+    state: () => store.get(),
+    setRouting: (patch) => app.actions.applyPlanRouting(patch),
+    waitForRoute: () => until(() => store.get().routeStatus !== 'loading', ROUTE_WAIT_MS),
+    selectProfile: (profile) => app.actions.selectProfile(profile),
+    setLayers: (layers) => app.actions.setLayers(layers),
+    showRouteView: async () => {
+      await replySettled();
+      tabs.select('plan');
+      sheet.expand();
+    },
+    openDeparture: () => app.actions.openDeparture(),
+    startNavigation: async () => {
+      await replySettled();
+      const state = store.get();
+      const route = state.routeStatus === 'ready' ? selectedRoute(state) : null;
+      if (!route) return false;
+      voice.dispatch({ type: 'leave' });
+      return app.routeList.navigate(route);
+    },
+  };
+  const applyPlan = createPlanQueue(planHost, () => nowWallTime().date);
 
   // ───────────── zdarzenia ─────────────
 
@@ -467,6 +484,7 @@ export function installAssistant(app: App): AssistantHandle {
     send(input.value);
   });
   input.addEventListener('input', () => {
+    voice.dispatch({ type: 'typed' });
     autosize();
     syncControls();
   });
@@ -475,10 +493,13 @@ export function installAssistant(app: App): AssistantHandle {
     event.preventDefault();
     send(input.value);
   });
-  stop.addEventListener('click', () => request?.abort());
-  mic.addEventListener('click', toggleListening);
+  stop.addEventListener('click', () => {
+    request?.abort();
+    voice.dispatch({ type: 'stop' });
+  });
   reset.addEventListener('click', () => {
     request?.abort();
+    voice.dispatch({ type: 'stop' });
     history.length = 0;
     elements.clear();
     renderLog();
@@ -491,7 +512,7 @@ export function installAssistant(app: App): AssistantHandle {
     panel.classList.toggle('panel--assistant', active);
     fab.hidden = active;
     if (active && history.length === 0) renderLog();
-    if (!active) stopListening();
+    if (!active) voice.dispatch({ type: 'leave' });
   };
   tabs.onChange(syncTab);
 

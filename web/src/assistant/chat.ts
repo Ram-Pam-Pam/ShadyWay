@@ -9,8 +9,9 @@ import type {
 } from '../../../shared/types.ts';
 import { formatDistance, formatDuration, formatPercent } from '../format.ts';
 import { MOBILITY_CHOICES, preferenceLabel, stressLabel, thermalText } from '../labels.ts';
+import { inServiceArea } from '../plan.ts';
 import type { AppState } from '../store.ts';
-import { formatClock, formatLongDate, instantToWallTime, wallTimeToIso } from '../time.ts';
+import { formatClock, instantToWallTime, nowWallTime, wallTimeToIso } from '../time.ts';
 
 /** Tyle ostatnich wiadomości trafia do serwera (serwer i tak przycina historię po swojej stronie). */
 export const HISTORY_LIMIT = 16;
@@ -18,6 +19,17 @@ export const HISTORY_LIMIT = 16;
 export const MESSAGE_CHAR_LIMIT = 3800;
 /** Treść zastępcza dla odpowiedzi asystenta, która składała się wyłącznie z planu. */
 export const PLAN_ONLY_PLACEHOLDER = '(Zastosowałem plan na mapie.)';
+
+/** Wynik wykonania planu w aplikacji (patrz planRunner.ts). */
+export interface PlanResult {
+  /** Jedna zwarta linia, np. „Ustawiono: AGH → Wawel, 15:00 · nawigacja uruchomiona”; null = nic do pokazania. */
+  summary: string | null;
+  /** Co się nie udało (krótko, po polsku) albo null. */
+  problem: string | null;
+  /** Czy plan ustawiał trasę (wtedy rozmowa proponuje „Pokaż trasę”). */
+  routed: boolean;
+  navigating: boolean;
+}
 
 export type ChatStatus = 'streaming' | 'done' | 'stopped' | 'error';
 
@@ -32,6 +44,8 @@ export interface ChatMessage {
   note?: string;
   tools: string[];
   plans: AssistantPlan[];
+  /** Wynik wykonania kolejnych planów (równolegle do `plans`); brak wpisu = plan jeszcze się wykonuje. */
+  planResults?: (PlanResult | undefined)[];
   status: ChatStatus;
   error?: string;
 }
@@ -138,22 +152,43 @@ const PROFILE_LABELS: Record<NonNullable<AssistantPlan['selectProfile']>, string
   shadiest: 'najbardziej zacieniony',
 };
 
-/** Lista zmian z planu, po polsku — pokazywana przy potwierdzeniu „Zastosowano na mapie”. */
-export function describePlan(plan: AssistantPlan): string[] {
+/** „15:00” dla dzisiejszej daty, „jutro 15:00” albo „15.07, 18:30” dla innych dni. */
+function shortTime(date: string, minutes: number, today: string): string {
+  const clock = formatClock(minutes);
+  if (date === today) return clock;
+  const [year, month, day] = today.split('-').map(Number);
+  const tomorrow = new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+  if (date === tomorrow) return `jutro ${clock}`;
+  return `${date.slice(8, 10)}.${date.slice(5, 7)}, ${clock}`;
+}
+
+/**
+ * Zwięzła lista zmian z planu, po polsku — składa się na linię potwierdzenia w rozmowie
+ * („Ustawiono: AGH → Wawel, 15:00 · bez schodów”). Pola, których aplikacja nie zastosuje, są pomijane.
+ */
+export function describePlan(plan: AssistantPlan, today: string = nowWallTime().date): string[] {
   const parts: string[] = [];
-  if (plan.from && plan.to) parts.push(`${plan.from.label} → ${plan.to.label}`);
-  else if (plan.from) parts.push(`start: ${plan.from.label}`);
-  else if (plan.to) parts.push(`cel: ${plan.to.label}`);
+  const from = plan.from && inServiceArea(plan.from) ? plan.from : null;
+  const to = plan.to && inServiceArea(plan.to) ? plan.to : null;
+  let where = '';
+  if (from && to) where = `${from.label} → ${to.label}`;
+  else if (from) where = `start: ${from.label}`;
+  else if (to) where = `cel: ${to.label}`;
+  let when = '';
   if (plan.time) {
     const instant = new Date(plan.time);
     if (!Number.isNaN(instant.getTime())) {
       const wall = instantToWallTime(instant);
-      parts.push(`wyjście ${formatLongDate(wall.date)}, ${formatClock(wall.minutes)}`);
+      when = shortTime(wall.date, wall.minutes, today);
     }
   }
-  if (plan.mobility) parts.push(`profil: ${choiceLabel(MOBILITY_CHOICES, plan.mobility).toLocaleLowerCase('pl-PL')}`);
+  if (where) parts.push(when ? `${where}, ${when}` : where);
+  else if (when) parts.push(`wyjście ${when}`);
+  if (plan.mobility && MOBILITY_CHOICES.some((choice) => choice.value === plan.mobility)) {
+    parts.push(choiceLabel(MOBILITY_CHOICES, plan.mobility).toLocaleLowerCase('pl-PL'));
+  }
   if (typeof plan.shadePreference === 'number' && Number.isFinite(plan.shadePreference)) {
-    parts.push(`preferencja: ${preferenceLabel(Math.min(1, Math.max(0, plan.shadePreference)), 'shade')}`);
+    parts.push(preferenceLabel(Math.min(1, Math.max(0, plan.shadePreference)), 'shade'));
   }
   if (plan.selectProfile && PROFILE_LABELS[plan.selectProfile]) parts.push(`wariant ${PROFILE_LABELS[plan.selectProfile]}`);
   return parts;

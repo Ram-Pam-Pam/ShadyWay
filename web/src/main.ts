@@ -20,6 +20,7 @@ import {
 import type { App, FitMode } from './app.ts';
 import { installAssistant } from './features/assistant.ts';
 import { DepartureFeature } from './features/departure.ts';
+import { installDepartureHint } from './features/departureHint.ts';
 import { installLocateButton } from './features/locate.ts';
 import { installNavigation } from './features/navigation.ts';
 import { installPwa } from './features/pwa.ts';
@@ -30,7 +31,6 @@ import { parseHash } from './hash.ts';
 import { comfortTexts, routeSummary } from './labels.ts';
 import { MapView } from './map.ts';
 import { cachedRouteFor, loadLastRoute, saveLastRoute } from './offlineRoute.ts';
-import { planToPatch } from './plan.ts';
 import { loadPrefs, savePrefs } from './prefs.ts';
 import {
   Store,
@@ -39,6 +39,7 @@ import {
   selectedRoute,
   type AppState,
   type EndpointKey,
+  type LayerToggles,
   type Place,
 } from './store.ts';
 import { instantToWallTime, nowWallTime, wallTimeToIso } from './time.ts';
@@ -394,7 +395,11 @@ fetchHeatMeta()
     store.set({ heat: { state: 'unavailable', reason: 'Nie udało się pobrać danych mapy ciepła' } });
   });
 
+/** Czy podkład mapy ma wysokości budynków (inaczej warstwy 3D nie da się włączyć). */
+let buildingsAvailable = true;
+
 map.whenReady(({ hasBuildings }) => {
+  buildingsAvailable = hasBuildings;
   if (!hasBuildings) layerPanel.disableBuildings();
 });
 
@@ -507,7 +512,7 @@ apply(store.get(), null);
 
 /**
  * Kontekst dla kolejnych modułów (patrz app.ts). Wzór użycia:
- *   installAssistant(app)  — tabs.enableAssistant(), czat w #assistant-panel, actions.applyPlan(plan)
+ *   installAssistant(app)  — tabs.enableAssistant(), czat w #assistant-panel, plan wykonuje assistant/planRunner.ts przez actions.*
  *   installNavigation(app) — routeList.setNavigationHandler(route => …), nakładka #nav-overlay
  */
 export const app: App = {
@@ -521,14 +526,29 @@ export const app: App = {
     placePoint,
     selectProfile,
     setDepartureTime,
-    applyPlan: (plan) => {
-      fitMode = 'always';
-      store.set(planToPatch(plan, store.get()));
+    applyPlanRouting: (patch) => {
+      if (patch.from || patch.to) fitMode = 'always';
+      store.set(patch);
+    },
+    setLayers: (layers) => {
+      const state = store.get();
+      const applied: Partial<LayerToggles> = {};
+      if (typeof layers.shadows === 'boolean') applied.shadows = layers.shadows;
+      if (typeof layers.heat === 'boolean' && state.heat.state === 'ready') applied.heat = layers.heat;
+      if (typeof layers.buildings3d === 'boolean' && buildingsAvailable) applied.buildings3d = layers.buildings3d;
+      if (Object.keys(applied).length > 0) store.set({ layers: { ...state.layers, ...applied } });
+      return applied;
+    },
+    openDeparture: () => {
+      if (departureBox.hidden) return;
+      departure.show();
+      departureBox.scrollIntoView({ block: 'nearest' });
     },
     refreshRoute: () => requestRoute(0, false),
   },
 };
 
+installDepartureHint(app);
 installAssistant(app);
 installNavigation(app);
 installPwa(app);
